@@ -15,8 +15,8 @@ import { createRng } from '../utils/rng.js';
 
 const TOTAL_LAPS = 3;
 const ITEM_RADIUS = 3.2;
-const FLASHBACK_SLOWMO = 0.22;   // 플래시백 중 시간 배율
-const FLASHBACK_DURATION = 2.4;  // 슬로모션 지속(실제 초)
+const GATE_SLOWMO = 0.5;        // 게이트 통과 시 시간 배율 (사진을 올려다볼 여유)
+const GATE_SLOWMO_DURATION = 1.1; // 슬로모션 지속(실제 초)
 
 function makeSky(palette) {
   const geo = new THREE.SphereGeometry(1600, 24, 16);
@@ -52,7 +52,7 @@ export class Game {
     this.container = container;
     this.photos = photos;
     this.palette = palette;
-    this.ui = ui; // { onHud, onFlashback, onLap, onFinish, onCountdown, onBoost }
+    this.ui = ui; // { onHud, onLap, onFinish, onCountdown, onBoost }
 
     this.running = false;
     this.disposed = false;
@@ -255,13 +255,11 @@ export class Game {
 
   onGateCrossed(gate) {
     if (!gate.flashed) {
-      // 첫 만남: 슬로모션 + 풀스크린 플래시백
+      // 첫 만남: 짧은 슬로모션 + 감성 차임 (연출은 게이트 자체가 담당)
       gate.flashed = true;
       this.score += 25;
-      this.slowmoRemaining = FLASHBACK_DURATION;
+      this.slowmoRemaining = GATE_SLOWMO_DURATION;
       sounds.memory();
-      const seen = this.gates.filter((g) => g.flashed).length;
-      this.ui.onFlashback(gate.photo, gate.label, seen, this.gates.length);
     } else {
       // 이후 랩: 가벼운 차임 + 소량 점수만
       this.score += 5;
@@ -307,9 +305,9 @@ export class Game {
     const rawDt = Math.min(this.clock.getDelta(), 0.05);
     const time = this.clock.elapsedTime;
 
-    // 플래시백 슬로모션: 시간 배율을 부드럽게 전환
+    // 게이트 슬로모션: 시간 배율을 부드럽게 전환
     if (this.slowmoRemaining > 0) this.slowmoRemaining -= rawDt;
-    const targetScale = this.slowmoRemaining > 0 ? FLASHBACK_SLOWMO : 1;
+    const targetScale = this.slowmoRemaining > 0 ? GATE_SLOWMO : 1;
     this.timeScale = THREE.MathUtils.lerp(this.timeScale, targetScale, Math.min(1, rawDt * 8));
     const dt = rawDt * this.timeScale;
 
@@ -342,6 +340,8 @@ export class Game {
         time: this.raceTime,
         score: this.score,
         boosting: this.car.boostTimer > 0,
+        memoriesSeen: this.gates.filter((g) => g.flashed).length,
+        totalMemories: this.gates.length,
       });
     }
 
