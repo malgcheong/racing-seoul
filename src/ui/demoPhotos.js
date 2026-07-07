@@ -99,9 +99,13 @@ export function generateDemoPhotos(count = 8) {
     canvas.width = 512;
     canvas.height = 384;
     drawScene(canvas.getContext('2d'), 512, 384, scene, rand);
+    const url = canvas.toDataURL('image/jpeg', 0.85);
     photos.push({
       id: `demo-${i}`,
-      dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+      thumbUrl: url,   // 512px이라 썸네일/텍스처 겸용
+      textureUrl: url,
+      width: 512,
+      height: 384,
       name: `${scene.name}.jpg`,
       memo: scene.name,
       selected: true,

@@ -29,8 +29,9 @@ function rgbToHsl(r, g, b) {
 }
 
 // 단일 사진 분석: 지배 색상(양자화 버킷 최빈값), 평균색, 밝기
+// 48px로 다운샘플하므로 썸네일이면 충분하다.
 export async function analyzePhoto(photo) {
-  const img = await loadImage(photo.dataUrl);
+  const img = await loadImage(photo.thumbUrl);
   const canvas = document.createElement('canvas');
   canvas.width = SAMPLE_SIZE;
   canvas.height = SAMPLE_SIZE;

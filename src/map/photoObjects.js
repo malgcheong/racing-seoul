@@ -9,9 +9,9 @@ import { range } from '../utils/rng.js';
 const textureLoader = new THREE.TextureLoader();
 
 function photoPlane(photo, height, opts = {}) {
-  const tex = textureLoader.load(photo.dataUrl);
+  const tex = textureLoader.load(photo.textureUrl);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const aspect = photo.analysis ? photo.analysis.width / photo.analysis.height : 4 / 3;
+  const aspect = photo.width && photo.height ? photo.width / photo.height : 4 / 3;
   const geo = new THREE.PlaneGeometry(height * aspect, height);
   const mat = new THREE.MeshBasicMaterial({
     map: tex,

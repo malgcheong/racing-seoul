@@ -3,6 +3,7 @@
 import { analyzePhotos, buildPalette } from './analysis/photoAnalyzer.js';
 import { Game } from './game/game.js';
 import { generateDemoPhotos } from './ui/demoPhotos.js';
+import { processImageFile } from './utils/imageProcess.js';
 
 const MIN_PHOTOS = 5;   // MVP 최소 장수 (정식 명세 2.2.5는 10장)
 const MAX_PHOTOS = 50;  // 명세 2.1.3
@@ -12,7 +13,7 @@ const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
-  photos: [],        // {id, dataUrl, name, memo, selected, analysis?}
+  photos: [],        // {id, thumbUrl, textureUrl, width, height, name, memo, selected, analysis?}
   palette: null,
   game: null,
   photoSeq: 0,
@@ -25,15 +26,6 @@ function showScreen(id) {
 }
 
 // ---------- 업로드 / 갤러리 ----------
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('파일을 읽을 수 없습니다.'));
-    reader.readAsDataURL(file);
-  });
-}
-
 async function addFiles(fileList) {
   const files = [...fileList];
   const errors = [];
@@ -51,10 +43,11 @@ async function addFiles(fileList) {
       errors.push(`${file.name}: ${MAX_FILE_MB}MB를 초과합니다.`);
       continue;
     }
-    const dataUrl = await readFileAsDataUrl(file);
+    // 원본은 버리고 리사이즈본만 보관 (팝업 렉·메모리 사용 방지)
+    const processed = await processImageFile(file);
     state.photos.push({
       id: `p-${state.photoSeq++}`,
-      dataUrl,
+      ...processed,
       name: file.name,
       memo: '',
       selected: true,
@@ -74,7 +67,7 @@ function renderGallery() {
     card.className = 'photo-card' + (photo.selected ? ' selected' : '');
 
     const img = document.createElement('img');
-    img.src = photo.dataUrl;
+    img.src = photo.thumbUrl;
     img.alt = photo.name;
     img.addEventListener('click', () => {
       photo.selected = !photo.selected;
@@ -180,7 +173,7 @@ function startGame(photos, seed) {
       $('#boost-indicator').classList.toggle('hidden', !boosting);
     },
     onMemory(photo, label) {
-      $('#popup-img').src = photo.dataUrl;
+      $('#popup-img').src = photo.thumbUrl;
       $('#popup-title').textContent = label;
       $('#popup-memo').textContent = photo.memo && photo.memo !== label ? photo.memo : '이 순간을 기억하나요?';
       $('#memory-popup').classList.remove('hidden');
