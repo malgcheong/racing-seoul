@@ -160,27 +160,17 @@ function formatTime(sec) {
 function startGame(photos, seed) {
   showScreen('#screen-game');
   $('#hud').classList.remove('hidden');
-  $('#flashback').classList.remove('show');
 
   state.game?.dispose();
-  let flashbackTimer = null;
 
   const ui = {
-    onHud({ speed, lap, totalLaps, time, score, boosting }) {
+    onHud({ speed, lap, totalLaps, time, score, boosting, memoriesSeen, totalMemories }) {
       $('#hud-speed').textContent = speed;
       $('#hud-lap').textContent = `${lap}/${totalLaps}`;
       $('#hud-time').textContent = formatTime(time);
       $('#hud-score').textContent = score;
+      $('#hud-memories').textContent = `${memoriesSeen}/${totalMemories}`;
       $('#boost-indicator').classList.toggle('hidden', !boosting);
-    },
-    onFlashback(photo, label, seen, total) {
-      // 풀스크린은 고해상도(1024px) 버전 사용
-      $('#flashback-img').src = photo.textureUrl;
-      $('#flashback-title').textContent = label;
-      $('#flashback-count').textContent = `추억 ${seen} / ${total}`;
-      $('#flashback').classList.add('show');
-      clearTimeout(flashbackTimer);
-      flashbackTimer = setTimeout(() => $('#flashback').classList.remove('show'), 2400);
     },
     onLap() {},
     onBoost() {},
