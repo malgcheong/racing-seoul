@@ -1,5 +1,6 @@
 // 추억 오브젝트 배치 (명세 3.1, 3.2)
-// - 사진 액자: 트랙을 따라 균등 간격으로 도로 옆에 세워 시각적으로 노출 (최소 5개 보장)
+// - 추억 게이트: 도로를 가로지르는 대형 사진 아치. 피해갈 수 없게 만들어
+//   통과 순간 플래시백 연출의 트리거가 된다. 트랙 순서 = 추억 여정 순서. (최소 5개 보장)
 // - 홀로그램: 반투명 사진 패널을 공중에 띄워 천천히 회전
 // - 수집 아이템: 트랙 위 오브(구슬), 획득 시 점수/부스터
 
@@ -22,68 +23,96 @@ function photoPlane(photo, height, opts = {}) {
   return new THREE.Mesh(geo, mat);
 }
 
-// 액자 프레임 + 사진 + 받침 기둥
-function makeFrame(photo) {
+const GATE_CLEARANCE = 6.5; // 사진 패널 하단 높이 (차량이 아래로 통과)
+
+// 도로를 가로지르는 사진 아치 게이트
+function makeGate(photo, roadWidth) {
   const group = new THREE.Group();
-  const photoH = 6.5;
-  const plane = photoPlane(photo, photoH);
-  const w = plane.geometry.parameters.width;
 
+  // 사진 패널: 도로 폭을 덮는 크기, 세로 사진은 높이 제한에 맞춰 축소
+  const aspect = photo.width && photo.height ? photo.width / photo.height : 4 / 3;
+  let w = roadWidth + 6;
+  let h = w / aspect;
+  if (h > 13) {
+    h = 13;
+    w = h * aspect;
+  }
+  const centerY = GATE_CLEARANCE + h / 2;
+
+  // 사진은 양면에: 접근할 때(-Z)와 지나친 뒤(+Z) 모두 좌우 반전 없이 보이도록
+  // (-Z 쪽 패널은 앞면이 접근 방향을 향하게 180° 회전)
+  for (const z of [-0.35, 0.35]) {
+    const plane = photoPlane(photo, h);
+    plane.position.set(0, centerY, z);
+    if (z < 0) plane.rotation.y = Math.PI;
+    group.add(plane);
+  }
+
+  // 흰 테두리(폴라로이드 느낌) 프레임 박스
   const frame = new THREE.Mesh(
-    new THREE.BoxGeometry(w + 0.8, photoH + 0.8, 0.4),
-    new THREE.MeshLambertMaterial({ color: 0xf5efe0 })
+    new THREE.BoxGeometry(w + 1.6, h + 1.6, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0xf7f2e6 })
   );
-  frame.position.y = photoH / 2 + 4;
-  plane.position.set(0, photoH / 2 + 4, 0.25);
-  group.add(frame, plane);
+  frame.position.y = centerY;
+  group.add(frame);
 
-  const pillar = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.35, 0.5, 4, 8),
-    new THREE.MeshLambertMaterial({ color: 0x8a8fa8 })
+  // 은은한 후광 (접근 방향, 프레임 가장자리 글로우)
+  const halo = new THREE.Mesh(
+    new THREE.PlaneGeometry(w + 5, h + 5),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff3cf,
+      transparent: true,
+      opacity: 0.16,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
   );
-  pillar.position.y = 2;
-  group.add(pillar);
+  halo.position.set(0, centerY, -0.26);
+  group.add(halo);
 
-  // 은은한 스포트 느낌의 발광 링
-  const glow = new THREE.Mesh(
-    new THREE.RingGeometry(1.4, 2.2, 24),
-    new THREE.MeshBasicMaterial({ color: 0xffe9b0, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
-  );
-  glow.rotation.x = -Math.PI / 2;
-  glow.position.y = 0.06;
-  group.add(glow);
+  // 양쪽 기둥
+  const pillarH = GATE_CLEARANCE + h + 0.8;
+  const pillarMat = new THREE.MeshLambertMaterial({ color: 0xe8e2d2 });
+  for (const side of [-1, 1]) {
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.1, pillarH, 1.1), pillarMat);
+    pillar.position.set(side * (roadWidth / 2 + 2.5), pillarH / 2, 0);
+    group.add(pillar);
+  }
 
   return group;
 }
 
-// 사진 액자들을 트랙을 따라 균등 배치. 최소 5개 보장 (명세 3.1.3)
-export function placePhotoFrames(scene, photos, samples, rng) {
-  const count = Math.max(5, Math.min(photos.length, 14));
-  const frames = [];
+// 추억 게이트를 트랙 진행 순서대로 균등 배치. 최소 5개 보장 (명세 3.1.3)
+// 사진 순서(업로드/선택 순) = 트랙에서 만나는 순서 → "추억 여정"
+export function placePhotoGates(scene, photos, samples, rng, roadWidth) {
+  const count = Math.max(5, Math.min(photos.length, 12));
+  const gates = [];
   const n = samples.length;
 
   for (let i = 0; i < count; i++) {
     const photo = photos[i % photos.length];
-    const idx = Math.floor((i / count) * n + range(rng, -n * 0.02, n * 0.02) + n) % n;
+    // (i+0.5)/count: 출발선과 겹치지 않게 반 칸 밀어서 배치
+    const idx = Math.floor(((i + 0.5) / count) * n + range(rng, -n * 0.01, n * 0.01) + n) % n;
     const s = samples[idx];
-    const side = i % 2 === 0 ? 1 : -1;
-    const offset = range(rng, 13, 18);
 
-    const group = makeFrame(photo);
-    group.position.copy(s.pos).addScaledVector(s.left, offset * side);
-    group.lookAt(s.pos.x, group.position.y, s.pos.z);
+    const group = makeGate(photo, roadWidth);
+    group.position.copy(s.pos);
+    group.lookAt(s.pos.clone().add(s.tangent));
     scene.add(group);
 
-    frames.push({
+    gates.push({
       photo,
       group,
-      position: group.position.clone(),
       sampleIdx: idx,
+      order: i,
       label: photo.memo || `추억 #${(i % photos.length) + 1}`,
-      visited: false,
+      flashed: false,
     });
   }
-  return frames;
+  // 진행 방향 기준 정렬 (통과 판정용)
+  gates.sort((a, b) => a.sampleIdx - b.sampleIdx);
+  return gates;
 }
 
 // 홀로그램: 공중에 떠서 회전하는 반투명 사진 (명세 3.1.2)
