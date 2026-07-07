@@ -160,9 +160,10 @@ function formatTime(sec) {
 function startGame(photos, seed) {
   showScreen('#screen-game');
   $('#hud').classList.remove('hidden');
-  $('#memory-popup').classList.add('hidden');
+  $('#flashback').classList.remove('show');
 
   state.game?.dispose();
+  let flashbackTimer = null;
 
   const ui = {
     onHud({ speed, lap, totalLaps, time, score, boosting }) {
@@ -172,14 +173,14 @@ function startGame(photos, seed) {
       $('#hud-score').textContent = score;
       $('#boost-indicator').classList.toggle('hidden', !boosting);
     },
-    onMemory(photo, label) {
-      $('#popup-img').src = photo.thumbUrl;
-      $('#popup-title').textContent = label;
-      $('#popup-memo').textContent = photo.memo && photo.memo !== label ? photo.memo : '이 순간을 기억하나요?';
-      $('#memory-popup').classList.remove('hidden');
-    },
-    onMemoryHide() {
-      $('#memory-popup').classList.add('hidden');
+    onFlashback(photo, label, seen, total) {
+      // 풀스크린은 고해상도(1024px) 버전 사용
+      $('#flashback-img').src = photo.textureUrl;
+      $('#flashback-title').textContent = label;
+      $('#flashback-count').textContent = `추억 ${seen} / ${total}`;
+      $('#flashback').classList.add('show');
+      clearTimeout(flashbackTimer);
+      flashbackTimer = setTimeout(() => $('#flashback').classList.remove('show'), 2400);
     },
     onLap() {},
     onBoost() {},

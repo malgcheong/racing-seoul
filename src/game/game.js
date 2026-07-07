@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { generateTrack, buildRoadMesh, buildStartLine } from '../map/trackGenerator.js';
 import { scatterDecorations } from '../map/decorations.js';
 import {
-  placePhotoFrames,
+  placePhotoGates,
   placeHolograms,
   placeItems,
   animatePhotoObjects,
@@ -14,8 +14,9 @@ import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 
 const TOTAL_LAPS = 3;
-const MEMORY_RADIUS = 24;   // 추억 팝업 근접 거리 (명세 3.2.1)
 const ITEM_RADIUS = 3.2;
+const FLASHBACK_SLOWMO = 0.22;   // 플래시백 중 시간 배율
+const FLASHBACK_DURATION = 2.4;  // 슬로모션 지속(실제 초)
 
 function makeSky(palette) {
   const geo = new THREE.SphereGeometry(1600, 24, 16);
@@ -51,7 +52,7 @@ export class Game {
     this.container = container;
     this.photos = photos;
     this.palette = palette;
-    this.ui = ui; // { onHud, onMemory, onMemoryHide, onLap, onFinish, onCountdown, onBoost }
+    this.ui = ui; // { onHud, onFlashback, onLap, onFinish, onCountdown, onBoost }
 
     this.running = false;
     this.disposed = false;
@@ -63,9 +64,8 @@ export class Game {
     this.lapStart = 0;
     this.bestLap = Infinity;
     this.raceTime = 0;
-    this.memoriesSeen = new Set();
-    this.activeMemory = null;
-    this.memoryHideAt = 0;
+    this.timeScale = 1;
+    this.slowmoRemaining = 0;
   }
 
   build(seed) {
@@ -104,7 +104,7 @@ export class Game {
     this.scene.add(buildRoadMesh(track.samples, track.width));
     this.scene.add(buildStartLine(track.samples, track.width));
     scatterDecorations(this.scene, rng, track.samples, this.palette);
-    this.frames = placePhotoFrames(this.scene, this.photos, track.samples, rng);
+    this.gates = placePhotoGates(this.scene, this.photos, track.samples, rng, track.width);
     this.holograms = placeHolograms(this.scene, this.photos, track.samples, rng);
     this.items = placeItems(this.scene, track.samples, rng, this.palette);
 
@@ -117,6 +117,7 @@ export class Game {
 
     this.currentSampleIdx = 0;
     this.prevProgress = 0;
+    this.prevGateSampleIdx = 0;
 
     this.bindInput();
     this.onResize = () => {
@@ -167,9 +168,14 @@ export class Game {
     await this.countdown();
     if (this.disposed) return;
     // 개발·검증용 자동 주행 (?autodrive=1)
-    if (new URLSearchParams(location.search).get('autodrive') === '1') {
+    const params = new URLSearchParams(location.search);
+    if (params.get('autodrive') === '1') {
       this.input.forward = true;
       this.autoSteer = true;
+    }
+    // 개발·검증용: 시작 직후 플래시백 강제 발동 (?flashtest=1)
+    if (params.get('flashtest') === '1' && this.gates.length) {
+      setTimeout(() => this.onGateCrossed(this.gates[0]), 1200);
     }
     this.running = true;
     this.clock.start();
@@ -232,31 +238,34 @@ export class Game {
     }
   }
 
-  checkMemories(now) {
-    const pos = this.car.group.position;
-    let nearest = null;
-    let nearestDist = MEMORY_RADIUS;
-    for (const f of this.frames) {
-      const d = pos.distanceTo(f.position);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearest = f;
+  // 게이트 통과 판정: 이번 프레임에 전진한 샘플 구간 안에 게이트가 있는지 검사
+  checkGates() {
+    const n = this.samples.length;
+    const cur = this.currentSampleIdx;
+    const advanced = (cur - this.prevGateSampleIdx + n) % n;
+    // 순간이동 수준(랩 경계 오차 등)은 무시
+    if (advanced > 0 && advanced < 80) {
+      for (const g of this.gates) {
+        const rel = (g.sampleIdx - this.prevGateSampleIdx + n) % n;
+        if (rel > 0 && rel <= advanced) this.onGateCrossed(g);
       }
     }
-    if (nearest && nearest !== this.activeMemory) {
-      this.activeMemory = nearest;
-      if (!this.memoriesSeen.has(nearest.photo.id)) {
-        this.memoriesSeen.add(nearest.photo.id);
-        this.score += 5;
-        sounds.memory();
-      }
-      this.ui.onMemory(nearest.photo, nearest.label);
-      this.memoryHideAt = now + 2.5;
-    } else if (nearest) {
-      this.memoryHideAt = now + 2.5;
-    } else if (this.activeMemory && now > this.memoryHideAt) {
-      this.activeMemory = null;
-      this.ui.onMemoryHide();
+    this.prevGateSampleIdx = cur;
+  }
+
+  onGateCrossed(gate) {
+    if (!gate.flashed) {
+      // 첫 만남: 슬로모션 + 풀스크린 플래시백
+      gate.flashed = true;
+      this.score += 25;
+      this.slowmoRemaining = FLASHBACK_DURATION;
+      sounds.memory();
+      const seen = this.gates.filter((g) => g.flashed).length;
+      this.ui.onFlashback(gate.photo, gate.label, seen, this.gates.length);
+    } else {
+      // 이후 랩: 가벼운 차임 + 소량 점수만
+      this.score += 5;
+      sounds.collect();
     }
   }
 
@@ -287,16 +296,22 @@ export class Game {
       totalTime: this.raceTime,
       bestLap: this.bestLap,
       score: this.score,
-      memoriesSeen: this.memoriesSeen.size,
-      totalMemories: new Set(this.frames.map((f) => f.photo.id)).size,
+      memoriesSeen: this.gates.filter((g) => g.flashed).length,
+      totalMemories: this.gates.length,
     });
   }
 
   loop() {
     if (this.disposed) return;
     requestAnimationFrame(() => this.loop());
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    const rawDt = Math.min(this.clock.getDelta(), 0.05);
     const time = this.clock.elapsedTime;
+
+    // 플래시백 슬로모션: 시간 배율을 부드럽게 전환
+    if (this.slowmoRemaining > 0) this.slowmoRemaining -= rawDt;
+    const targetScale = this.slowmoRemaining > 0 ? FLASHBACK_SLOWMO : 1;
+    this.timeScale = THREE.MathUtils.lerp(this.timeScale, targetScale, Math.min(1, rawDt * 8));
+    const dt = rawDt * this.timeScale;
 
     if (this.running) {
       this.raceTime += dt;
@@ -317,7 +332,7 @@ export class Game {
       const onRoad = dist < this.trackWidth / 2 + 1.5;
       this.car.update(dt, this.input, onRoad);
       this.checkItems();
-      this.checkMemories(time);
+      this.checkGates();
       this.checkLap();
 
       this.ui.onHud({
