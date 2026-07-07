@@ -1,7 +1,13 @@
 // 게임 루프: 씬 구성, 주행, 랩/점수, 추억 근접 팝업
 
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { generateTrack, buildRoadMesh, buildStartLine } from '../map/trackGenerator.js';
+import { ParticleSystem } from './particles.js';
 import { scatterDecorations } from '../map/decorations.js';
 import {
   placePhotoGates,
@@ -17,6 +23,34 @@ const TOTAL_LAPS = 3;
 const ITEM_RADIUS = 3.2;
 const GATE_SLOWMO = 0.5;        // 게이트 통과 시 시간 배율 (사진을 올려다볼 여유)
 const GATE_SLOWMO_DURATION = 1.1; // 슬로모션 지속(실제 초)
+const BASE_FOV = 68;
+const MAX_SPEED_ABS = 58;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
+
+// 화면 가장자리를 살짝 어둡게 (비네트)
+const VignetteShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    strength: { value: 0.4 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float strength;
+    varying vec2 vUv;
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      float d = distance(vUv, vec2(0.5));
+      color.rgb *= 1.0 - smoothstep(0.3, 0.8, d) * strength;
+      gl_FragColor = color;
+    }
+  `,
+};
 
 function makeSky(palette) {
   const geo = new THREE.SphereGeometry(1600, 24, 16);
@@ -75,27 +109,60 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = this.palette.isDusk ? 1.1 : 1.0;
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(this.palette.fog, 250, 1300);
 
     this.camera = new THREE.PerspectiveCamera(
-      68,
+      BASE_FOV,
       this.container.clientWidth / this.container.clientHeight,
       0.1,
       3000
     );
 
-    // 조명 (어두운 사진 세트면 노을 무드)
-    const ambient = new THREE.AmbientLight(0xffffff, this.palette.isDusk ? 0.55 : 0.75);
-    const sun = new THREE.DirectionalLight(
-      this.palette.isDusk ? 0xffb27a : 0xffffff,
-      this.palette.isDusk ? 0.9 : 1.1
+    // 조명: 하늘/지면 색을 반영한 헤미스피어 + 그림자 태양광
+    // 헤미가 세면 그림자 영역까지 밝아져 그림자가 사라진다 — 태양광 위주로
+    const hemi = new THREE.HemisphereLight(
+      this.palette.skyHorizon,
+      this.palette.ground,
+      this.palette.isDusk ? 0.45 : 0.55
     );
-    sun.position.set(180, 260, 120);
-    this.scene.add(ambient, sun);
+    const sun = new THREE.DirectionalLight(
+      this.palette.isDusk ? 0xffb27a : 0xfff6e8,
+      this.palette.isDusk ? 1.5 : 1.9
+    );
+    this.sunDir = new THREE.Vector3(0.5, 0.72, 0.34).normalize();
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -95;
+    sun.shadow.camera.right = 95;
+    sun.shadow.camera.top = 95;
+    sun.shadow.camera.bottom = -95;
+    sun.shadow.camera.near = 30;
+    sun.shadow.camera.far = 600;
+    sun.shadow.camera.updateProjectionMatrix(); // 속성 변경 후 필수
+    sun.shadow.bias = -0.0006;
+    this.sun = sun;
+    this.scene.add(hemi, sun, sun.target);
     this.scene.add(makeSky(this.palette));
+
+    // 포스트프로세싱: bloom(빛 번짐) + 비네트
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(this.container.clientWidth, this.container.clientHeight),
+      0.28, 0.45, 0.82
+    );
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new ShaderPass(VignetteShader));
+    this.composer.addPass(new OutputPass());
+
+    this.particles = new ParticleSystem(this.scene);
 
     // 트랙 + 장식 + 추억 오브젝트
     const track = generateTrack(rng);
@@ -111,6 +178,7 @@ export class Game {
     // 차량: 출발선에서 트랙 진행 방향으로
     const s0 = this.samples[0];
     this.car = new Car(this.palette.accents[0]);
+    this.car.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     const heading = Math.atan2(s0.tangent.x, s0.tangent.z);
     this.car.placeAt(s0.pos.clone().setY(0), heading);
     this.scene.add(this.car.group);
@@ -127,12 +195,14 @@ export class Game {
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
+      this.composer.setSize(w, h);
     };
     window.addEventListener('resize', this.onResize);
 
     // 첫 프레임 렌더 (카운트다운 배경)
     this.updateCamera(true);
-    this.renderer.render(this.scene, this.camera);
+    this.updateSun();
+    this.composer.render();
   }
 
   bindInput() {
@@ -215,8 +285,62 @@ export class Game {
       .add(new THREE.Vector3(0, 5.5, 0));
     if (snap) this.camera.position.copy(target);
     else this.camera.position.lerp(target, 0.08);
+
+    // 속도감: 고속·부스터에서 시야각이 벌어지고 카메라가 미세하게 흔들림
+    const speedRatio = Math.min(1, Math.abs(this.car.speed) / MAX_SPEED_ABS);
+    const boosting = this.car.boostTimer > 0;
+    const targetFov = BASE_FOV + speedRatio * speedRatio * 9 + (boosting ? 7 : 0);
+    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.07);
+    this.camera.updateProjectionMatrix();
+
+    const shake = speedRatio * speedRatio * 0.09 + (boosting ? 0.16 : 0);
+    if (shake > 0.01) {
+      this.camera.position.x += (Math.random() - 0.5) * shake;
+      this.camera.position.y += (Math.random() - 0.5) * shake * 0.6;
+      this.camera.position.z += (Math.random() - 0.5) * shake;
+    }
+
     const lookAt = car.position.clone().add(new THREE.Vector3(0, 1.8, 0));
     this.camera.lookAt(lookAt);
+  }
+
+  // 태양(그림자 카메라)이 차량을 따라다니며 주변에만 고해상도 그림자를 드리움
+  updateSun() {
+    const pos = this.car.group.position;
+    this.sun.position.copy(pos).addScaledVector(this.sunDir, 280);
+    this.sun.target.position.copy(pos);
+    this.sun.target.updateMatrixWorld();
+  }
+
+  // 부스터 불꽃 / 드리프트 스모크
+  emitDriveParticles() {
+    const car = this.car;
+    const back = new THREE.Vector3(-Math.sin(car.heading), 0, -Math.cos(car.heading));
+    const rear = car.group.position.clone().addScaledVector(back, 2.4);
+    rear.y = 0.7;
+
+    if (car.boostTimer > 0) {
+      for (let i = 0; i < 4; i++) {
+        const jitter = new THREE.Vector3(
+          (Math.random() - 0.5) * 1.2, Math.random() * 0.5, (Math.random() - 0.5) * 1.2
+        );
+        const vel = back.clone().multiplyScalar(14 + Math.random() * 8).add(jitter.multiplyScalar(4));
+        const color = { r: 1.0, g: 0.45 + Math.random() * 0.35, b: 0.12 };
+        this.particles.emit(rear.clone().add(jitter), vel, color, 0.4 + Math.random() * 0.25);
+      }
+    }
+    const steering = this.input.left || this.input.right;
+    if (this.input.drift && steering && Math.abs(car.speed) > 18) {
+      for (let i = 0; i < 2; i++) {
+        const side = i === 0 ? 1 : -1;
+        const left = new THREE.Vector3(-back.z, 0, back.x);
+        const wheel = rear.clone().addScaledVector(left, side * 1.1);
+        wheel.y = 0.35;
+        const vel = back.clone().multiplyScalar(5).add(new THREE.Vector3(0, 1.8 + Math.random(), 0));
+        const g = 0.5 + Math.random() * 0.2;
+        this.particles.emit(wheel, vel, { r: g, g, b: g }, 0.6 + Math.random() * 0.3);
+      }
+    }
   }
 
   checkItems() {
@@ -329,6 +453,7 @@ export class Game {
       const { dist } = this.findNearestSample();
       const onRoad = dist < this.trackWidth / 2 + 1.5;
       this.car.update(dt, this.input, onRoad);
+      this.emitDriveParticles();
       this.checkItems();
       this.checkGates();
       this.checkLap();
@@ -346,8 +471,10 @@ export class Game {
     }
 
     animatePhotoObjects(this.holograms, this.items, time);
+    this.particles.update(rawDt);
     this.updateCamera();
-    this.renderer.render(this.scene, this.camera);
+    this.updateSun();
+    this.composer.render();
   }
 
   dispose() {
@@ -356,6 +483,7 @@ export class Game {
     window.removeEventListener('keydown', this.keydown);
     window.removeEventListener('keyup', this.keyup);
     window.removeEventListener('resize', this.onResize);
+    this.composer?.dispose();
     this.renderer?.dispose();
     this.renderer?.domElement?.remove();
   }

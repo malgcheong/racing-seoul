@@ -30,6 +30,7 @@ function makeTree(rng, palette) {
     new THREE.MeshLambertMaterial({ color: 0x6b4a2f })
   );
   trunk.position.y = trunkH / 2;
+  trunk.castShadow = true;
   group.add(trunk);
 
   const accent = pick(rng, palette.accents);
@@ -42,6 +43,7 @@ function makeTree(rng, palette) {
       new THREE.MeshLambertMaterial({ color: leafColor })
     );
     cone.position.y = trunkH + i * radius * 0.9;
+    cone.castShadow = true;
     group.add(cone);
   }
   return group;
@@ -58,6 +60,7 @@ function makeBuilding(rng, palette) {
     new THREE.MeshLambertMaterial({ color })
   );
   mesh.position.y = h / 2;
+  mesh.castShadow = true;
   return mesh;
 }
 
@@ -69,6 +72,7 @@ export function scatterDecorations(scene, rng, samples, palette) {
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.05;
+  ground.receiveShadow = true;
   scene.add(ground);
 
   // 거리 판정용 성긴 샘플

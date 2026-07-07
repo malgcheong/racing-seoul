@@ -54,6 +54,7 @@ function makeGate(photo, roadWidth) {
     new THREE.MeshLambertMaterial({ color: 0xf7f2e6 })
   );
   frame.position.y = centerY;
+  frame.castShadow = true;
   group.add(frame);
 
   // 은은한 후광 (접근 방향, 프레임 가장자리 글로우)
@@ -77,6 +78,7 @@ function makeGate(photo, roadWidth) {
   for (const side of [-1, 1]) {
     const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.1, pillarH, 1.1), pillarMat);
     pillar.position.set(side * (roadWidth / 2 + 2.5), pillarH / 2, 0);
+    pillar.castShadow = true;
     group.add(pillar);
   }
 
