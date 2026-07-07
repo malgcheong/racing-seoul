@@ -127,8 +127,8 @@ body {
 .hud { position: absolute; inset: 0; pointer-events: none; }
 .hud-top {
   position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 28px; background: rgba(10, 12, 25, .55);
-  padding: 10px 24px; border-radius: 14px; backdrop-filter: blur(6px);
+  display: flex; gap: 28px; background: rgba(10, 12, 25, .75);
+  padding: 10px 24px; border-radius: 14px;
 }
 .hud-item { display: flex; flex-direction: column; align-items: center; min-width: 70px; }
 .hud-label { font-size: 11px; color: var(--muted); letter-spacing: 2px; }
@@ -146,10 +146,11 @@ body {
 }
 @keyframes pulse { from { opacity: .7; } to { opacity: 1; transform: translateX(-50%) scale(1.06); } }
 
+/* 주의: 게임 캔버스 위에서는 backdrop-filter가 매 프레임 블러 비용을 유발하므로 금지 */
 .memory-popup {
   position: absolute; left: 24px; bottom: 24px; width: 300px;
-  background: rgba(12, 14, 28, .82); border: 1px solid #3a4370;
-  border-radius: 14px; overflow: hidden; backdrop-filter: blur(8px);
+  background: rgba(12, 14, 28, .93); border: 1px solid #3a4370;
+  border-radius: 14px; overflow: hidden;
   animation: slideIn .25s ease;
 }
 @keyframes slideIn { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }

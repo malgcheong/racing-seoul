@@ -46,7 +46,7 @@ function makeSky(palette) {
 }
 
 export class Game {
-  // photos: [{dataUrl, memo, analysis}], palette: buildPalette 결과
+  // photos: [{thumbUrl, textureUrl, memo, analysis}], palette: buildPalette 결과
   constructor(container, photos, palette, ui) {
     this.container = container;
     this.photos = photos;
