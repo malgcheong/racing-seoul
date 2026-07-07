@@ -1,0 +1,130 @@
+// 동적 맵(트랙) 생성 엔진 (명세 1.2)
+// 시드 난수로 폐곡선 컨트롤 포인트를 잡고 Catmull-Rom 스플라인으로
+// 레이싱 트랙을 만든다. 같은 사진 세트여도 시드가 달라 매번 다른 맵이 나온다.
+
+import * as THREE from 'three';
+import { range } from '../utils/rng.js';
+
+export const TRACK_WIDTH = 16;
+export const SAMPLE_COUNT = 900;
+
+export function generateTrack(rng) {
+  const pointCount = 10 + Math.floor(rng() * 4);
+  const baseRadius = 230;
+  const points = [];
+  for (let i = 0; i < pointCount; i++) {
+    const angle = (i / pointCount) * Math.PI * 2 + range(rng, -0.12, 0.12);
+    const radius = baseRadius * range(rng, 0.55, 1.25);
+    points.push(new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius));
+  }
+
+  const curve = new THREE.CatmullRomCurve3(points, true, 'centripetal', 0.6);
+
+  const samples = [];
+  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    const t = i / SAMPLE_COUNT;
+    const pos = curve.getPointAt(t);
+    const tangent = curve.getTangentAt(t).normalize();
+    // 평면 트랙: 좌측 법선은 접선을 90도 회전
+    const left = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+    samples.push({ pos, tangent, left });
+  }
+
+  return { curve, samples, width: TRACK_WIDTH };
+}
+
+// 아스팔트 + 중앙 점선 + 양측 흰 라인 텍스처
+function createRoadTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#33353d';
+  ctx.fillRect(0, 0, 256, 256);
+  // 노이즈 알갱이
+  for (let i = 0; i < 900; i++) {
+    const v = 40 + Math.random() * 40;
+    ctx.fillStyle = `rgba(${v},${v},${v + 6},0.35)`;
+    ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+  }
+  // 양측 흰 라인
+  ctx.fillStyle = '#e8e8e8';
+  ctx.fillRect(6, 0, 8, 256);
+  ctx.fillRect(242, 0, 8, 256);
+  // 중앙 점선(노랑)
+  ctx.fillStyle = '#ffcf4d';
+  for (let y = 0; y < 256; y += 64) {
+    ctx.fillRect(124, y, 8, 36);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+export function buildRoadMesh(samples, width) {
+  const half = width / 2;
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  const n = samples.length;
+
+  let dist = 0;
+  for (let i = 0; i <= n; i++) {
+    const s = samples[i % n];
+    if (i > 0) {
+      const prev = samples[(i - 1) % n];
+      dist += s.pos.distanceTo(prev.pos);
+    }
+    const l = s.pos.clone().addScaledVector(s.left, half);
+    const r = s.pos.clone().addScaledVector(s.left, -half);
+    positions.push(l.x, 0.02, l.z, r.x, 0.02, r.z);
+    const v = dist / 18;
+    uvs.push(0, v, 1, v);
+    if (i < n) {
+      const a = i * 2;
+      // 위(+Y)를 향하도록 반시계 winding
+      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshLambertMaterial({ map: createRoadTexture() });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// 출발/결승 체커 라인
+export function buildStartLine(samples, width) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  const cell = 16;
+  for (let x = 0; x < 128 / cell; x++) {
+    for (let y = 0; y < 32 / cell; y++) {
+      ctx.fillStyle = (x + y) % 2 === 0 ? '#ffffff' : '#111111';
+      ctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+
+  const s = samples[0];
+  const geo = new THREE.PlaneGeometry(width, 4);
+  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.copy(s.pos).setY(0.05);
+  // 트랙 진행 방향에 맞춰 회전
+  mesh.rotation.z = Math.atan2(s.tangent.x, s.tangent.z);
+  return mesh;
+}

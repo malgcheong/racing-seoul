@@ -1,0 +1,18 @@
+{
+  "name": "memory-racing",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "추억 여정 레이싱 게임 MVP - 업로드한 사진으로 개인화 레이싱 맵을 생성",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
