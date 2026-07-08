@@ -1,15 +1,16 @@
-// 야간 고가도로 환경 구성
-// - 데크: 갓길 포장 + 측면 스커트(거더) + 어두운 파라펫 + 상단 LED 라이트 스트립
-// - 교각이 일정 간격으로 지상까지 내려감
-// - 데크 아래·옆으로 불 켜진 빌딩 스카이라인 (창문 발광 랜덤)
-// - 가로등: 발광 헤드 + 도로 위 빛 웅덩이 데칼 (실제 광원 없이 야간 연출)
+// 야간 고가도로 환경 구성 (인스턴싱 버전)
+// 반복 오브젝트(빌딩·가로등·교각·산)는 InstancedMesh로 묶어
+// 수백 개의 드로우콜을 종류당 1개로 줄인다.
+// 빌딩 외벽/창문 색은 instanceColor로 개별 유지.
 
 import * as THREE from 'three';
 import { pick, range } from '../utils/rng.js';
-import { instantiate } from '../utils/assets.js';
+import { getAssetTemplate } from '../utils/assets.js';
 
 const SHOULDER = 2.2;        // 도로 가장자리 → 파라펫까지 갓길 폭
 const PARAPET_HEIGHT = 1.15;
+const CONE_HEIGHT = 5.3;
+const UP = new THREE.Vector3(0, 1, 0);
 
 function lerpColor(a, b, t) {
   return new THREE.Color(a).lerp(new THREE.Color(b), t);
@@ -26,7 +27,8 @@ function minDistToTrack(x, z, coarse) {
   return Math.sqrt(min);
 }
 
-// 트랙을 따라가는 리본 지오메트리 (height>0: 수직 벽 / 아니면: 수평 데크)
+// 트랙을 따라가는 리본 지오메트리
+// height>0: 수직 벽 / offset>0 && side!=0: 사이드 밴드 / 그 외: 중심 수평 리본
 function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, yBase = 0 }) {
   const positions = [];
   const uvs = [];
@@ -44,7 +46,6 @@ function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, yBa
       positions.push(bx, y0, bz, bx, y0 + height, bz);
       uvs.push(dist / 6, 0, dist / 6, 1);
     } else if (offset > 0 && side !== 0) {
-      // 사이드 밴드: 중심선에서 offset만큼 떨어진 폭 2*wHalf 띠 (LED 반사 번짐 등)
       const l = s.pos.clone().addScaledVector(s.left, (offset + wHalf) * side);
       const r = s.pos.clone().addScaledVector(s.left, (offset - wHalf) * side);
       positions.push(l.x, l.y + yBase, l.z, r.x, r.y + yBase, r.z);
@@ -86,10 +87,8 @@ function lightPoolTexture() {
   return new THREE.CanvasTexture(canvas);
 }
 
-const CONE_HEIGHT = 5.3;
-
-// 볼륨 라이트 콘 셰이더 — 실루엣(시선과 면이 스치는 각)에서 소멸시켜
-// 폴리곤 고깔 윤곽을 지운다. 빛기둥을 두껍게 관통하는 중심부만 은은하게 남음.
+// 볼륨 라이트 콘 셰이더 — 실루엣에서 소멸시켜 폴리곤 고깔 윤곽을 지운다
+// InstancedMesh 대응: USE_INSTANCING 분기
 function makeConeMaterial() {
   return new THREE.ShaderMaterial({
     transparent: true,
@@ -107,8 +106,14 @@ function makeConeMaterial() {
       varying float vH; // 0=바닥, 1=램프 헤드
       uniform float uHeight;
       void main() {
-        vNormal = normalize(normalMatrix * normal);
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vec4 pos = vec4(position, 1.0);
+        vec3 nrm = normal;
+        #ifdef USE_INSTANCING
+          pos = instanceMatrix * pos;
+          nrm = mat3(instanceMatrix) * nrm;
+        #endif
+        vNormal = normalize(normalMatrix * nrm);
+        vec4 mv = modelViewMatrix * pos;
         vViewDir = normalize(-mv.xyz);
         vH = clamp(position.y / uHeight + 0.5, 0.0, 1.0);
         gl_Position = projectionMatrix * mv;
@@ -130,34 +135,51 @@ function makeConeMaterial() {
   });
 }
 
-// 창문 발광 배리에이션 (빌딩 단위로 랜덤 적용)
-function windowVariants() {
-  return [
-    { mat: new THREE.MeshBasicMaterial({ color: 0xffc978 }), p: 0.45 }, // 따뜻한 불빛
-    { mat: new THREE.MeshBasicMaterial({ color: 0x9fc0ff }), p: 0.25 }, // 차가운 불빛
-    { mat: new THREE.MeshBasicMaterial({ color: 0x0d1018 }), p: 0.3 },  // 소등
-  ];
+function composeMatrix(pos, yaw, scale = new THREE.Vector3(1, 1, 1)) {
+  return new THREE.Matrix4().compose(
+    pos,
+    new THREE.Quaternion().setFromAxisAngle(UP, yaw),
+    scale
+  );
 }
 
-function makeLamp(headMat, poleMat, coneMat) {
-  const lamp = new THREE.Group();
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 5.2, 8), poleMat);
-  pole.position.y = 2.6;
-  lamp.add(pole);
-  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 2.0), poleMat);
-  arm.position.set(0, 5.1, 0.9);
-  lamp.add(arm);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.68), headMat);
-  head.position.set(0, 5.0, 1.75);
-  lamp.add(head);
-  // 볼륨 라이트 콘: 헤드에서 도로로 은은하게 쏟아지는 빛기둥
-  const cone = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.28, 3.6, CONE_HEIGHT, 24, 1, true),
-    coneMat
-  );
-  cone.position.set(0, 2.35, 1.75);
-  lamp.add(cone);
-  return lamp;
+function addInstanced(scene, geometry, material, matrices, { colors = null, castShadow = false } = {}) {
+  const im = new THREE.InstancedMesh(geometry, material, matrices.length);
+  matrices.forEach((m, i) => {
+    im.setMatrixAt(i, m);
+    if (colors) im.setColorAt(i, colors[i]);
+  });
+  im.instanceMatrix.needsUpdate = true;
+  if (im.instanceColor) im.instanceColor.needsUpdate = true;
+  im.castShadow = castShadow;
+  im.frustumCulled = false; // 트랙 전체에 퍼져 있어 컬링 이득이 없음
+  scene.add(im);
+  return im;
+}
+
+// 빌딩 에셋의 프리미티브별 InstancedMesh 생성 (외벽/창문은 instanceColor)
+function buildInstancedBuildings(scene, type, list) {
+  if (!list.length) return;
+  const meshes = [];
+  getAssetTemplate(type).traverse((o) => { if (o.isMesh) meshes.push(o); });
+
+  for (const mesh of meshes) {
+    const name = mesh.material.name;
+    let material = mesh.material;
+    let colors = null;
+    if (name === 'Facade') {
+      material = mesh.material.clone();
+      material.color.set(0xffffff); // instanceColor가 곱해짐
+      colors = list.map((b) => b.facade);
+    } else if (name === 'Window') {
+      material = new THREE.MeshBasicMaterial({ color: 0xffffff }); // 야간 발광(언릿)
+      colors = list.map((b) => b.window);
+    }
+    addInstanced(scene, mesh.geometry, material, list.map((b) => b.matrix), {
+      colors,
+      castShadow: name === 'Facade',
+    });
+  }
 }
 
 export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
@@ -171,7 +193,7 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     return total / n;
   })();
 
-  // 1) 지상: 야간 도시 바닥 (아주 어둡게)
+  // 1) 지상: 야간 도시 바닥
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(1400, 48),
     new THREE.MeshLambertMaterial({ color: lerpColor(palette.ground, 0x04050a, 0.8) })
@@ -181,7 +203,7 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // 2) 데크 갓길 포장 (도로보다 살짝 아래, 어두운 콘크리트)
+  // 2) 데크 갓길 포장
   const apron = new THREE.Mesh(
     trackRibbon(samples, { wHalf: parapetOffset + 0.35, yBase: -0.015 }),
     new THREE.MeshLambertMaterial({ color: 0x3c3e46 })
@@ -189,7 +211,7 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
   apron.receiveShadow = true;
   scene.add(apron);
 
-  // 3) 데크 측면 스커트(거더) — 아래에서 봐도 고가답게
+  // 3) 데크 측면 스커트(거더)
   const skirtMat = new THREE.MeshBasicMaterial({ color: 0x1b1d26, side: THREE.DoubleSide });
   for (const side of [-1, 1]) {
     scene.add(new THREE.Mesh(
@@ -198,9 +220,12 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     ));
   }
 
-  // 4) 파라펫(어두운 방호벽) + 상단 LED 라이트 스트립
+  // 4) 파라펫 + LED 스트립 + 젖은 노면 반사 밴드
   const parapetMat = new THREE.MeshBasicMaterial({ color: 0x31343e, side: THREE.DoubleSide });
   const stripMat = new THREE.MeshBasicMaterial({ color: 0xffd9a2, side: THREE.DoubleSide });
+  const stripReflMat = new THREE.MeshBasicMaterial({
+    color: 0x241b0e, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+  });
   for (const side of [-1, 1]) {
     scene.add(new THREE.Mesh(
       trackRibbon(samples, { offset: parapetOffset, side, height: PARAPET_HEIGHT }),
@@ -210,58 +235,74 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
       trackRibbon(samples, { offset: parapetOffset, side, height: 0.12, yBase: PARAPET_HEIGHT }),
       stripMat
     ));
-    // 젖은 노면에 어리는 LED 스트립 반사 번짐 (가산이라 어두운 색 = 은은)
     scene.add(new THREE.Mesh(
       trackRibbon(samples, { offset: parapetOffset - 1.0, side, wHalf: 0.9, yBase: 0.035 }),
-      new THREE.MeshBasicMaterial({
-        color: 0x241b0e, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
-      })
+      stripReflMat
     ));
   }
 
-  // 5) 교각 (일정 간격, 지상 → 데크)
-  const pierMat = new THREE.MeshLambertMaterial({ color: 0x272a34 });
+  // 5) 교각 (인스턴싱)
+  const pierMatrices = [];
   const pierStep = Math.max(1, Math.round(38 / segLen));
   for (let i = 0; i < n; i += pierStep) {
     const s = samples[i];
-    const pier = new THREE.Mesh(new THREE.BoxGeometry(3.6, deckY, 2.6), pierMat);
-    pier.position.set(s.pos.x, deckY / 2 - 0.1, s.pos.z);
-    pier.rotation.y = Math.atan2(s.tangent.x, s.tangent.z);
-    scene.add(pier);
+    pierMatrices.push(composeMatrix(
+      new THREE.Vector3(s.pos.x, deckY / 2 - 0.1, s.pos.z),
+      Math.atan2(s.tangent.x, s.tangent.z)
+    ));
   }
+  addInstanced(scene, new THREE.BoxGeometry(3.6, deckY, 2.6),
+    new THREE.MeshLambertMaterial({ color: 0x272a34 }), pierMatrices);
 
-  // 6) 가로등 (양쪽 교차): 발광 헤드 + 볼륨 라이트 콘 + 소프트 빛 웅덩이
-  //    실제 광원은 game.js가 차 근처 가로등 3개에만 풀링해서 붙인다
+  // 6) 가로등 (파트별 인스턴싱: 기둥/암/헤드/볼륨콘/빛웅덩이)
   const lampHeads = [];
-  const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0xfff1d4 });
-  const lampPoleMat = new THREE.MeshLambertMaterial({ color: 0x3a3d47 });
-  const coneMat = makeConeMaterial();
-  const poolMat = new THREE.MeshBasicMaterial({
-    map: lightPoolTexture(), transparent: true, blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
+  const lampMatrices = [];
+  const poolMatrices = [];
+  const HEAD_LOCAL = new THREE.Vector3(0, 5.0, 1.75);
   const lampStep = Math.max(1, Math.round(30 / segLen));
   let lampIdx = 0;
   for (let i = 0; i < n; i += lampStep) {
     const s = samples[i];
     const side = lampIdx++ % 2 === 0 ? 1 : -1;
-    const lamp = makeLamp(lampHeadMat, lampPoleMat, coneMat);
-    lamp.position.copy(s.pos).addScaledVector(s.left, (parapetOffset - 0.35) * side);
-    lamp.rotation.y = Math.atan2(-s.left.x * side, -s.left.z * side); // 헤드가 도로 쪽으로
-    scene.add(lamp);
-    lamp.updateMatrixWorld(true);
-    lampHeads.push(lamp.localToWorld(new THREE.Vector3(0, 5.0, 1.75)));
+    const pos = s.pos.clone().addScaledVector(s.left, (parapetOffset - 0.35) * side);
+    const yaw = Math.atan2(-s.left.x * side, -s.left.z * side); // 헤드가 도로 쪽으로
+    const m = composeMatrix(pos, yaw);
+    lampMatrices.push(m);
+    lampHeads.push(HEAD_LOCAL.clone().applyMatrix4(m));
 
-    const pool = new THREE.Mesh(new THREE.PlaneGeometry(22, 22), poolMat);
-    pool.rotation.x = -Math.PI / 2;
-    pool.position.copy(s.pos)
+    const poolPos = s.pos.clone()
       .addScaledVector(s.left, (parapetOffset - 2.1) * side)
       .setY(deckY + 0.04);
-    scene.add(pool);
+    poolMatrices.push(new THREE.Matrix4().compose(
+      poolPos,
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)),
+      new THREE.Vector3(1, 1, 1)
+    ));
   }
 
-  // 7) 지상 빌딩 스카이라인 (양 사이드 상시 채움, 창문 불빛 랜덤)
-  const winVars = windowVariants();
+  const poleMat = new THREE.MeshLambertMaterial({ color: 0x3a3d47 });
+  const lampParts = [
+    { geo: new THREE.CylinderGeometry(0.12, 0.16, 5.2, 8), mat: poleMat, local: new THREE.Vector3(0, 2.6, 0) },
+    { geo: new THREE.BoxGeometry(0.16, 0.16, 2.0), mat: poleMat, local: new THREE.Vector3(0, 5.1, 0.9) },
+    { geo: new THREE.BoxGeometry(0.42, 0.14, 0.68), mat: new THREE.MeshBasicMaterial({ color: 0xfff1d4 }), local: new THREE.Vector3(0, 5.0, 1.75) },
+    { geo: new THREE.CylinderGeometry(0.28, 3.6, CONE_HEIGHT, 24, 1, true), mat: makeConeMaterial(), local: new THREE.Vector3(0, 2.35, 1.75) },
+  ];
+  for (const part of lampParts) {
+    const localM = new THREE.Matrix4().makeTranslation(part.local.x, part.local.y, part.local.z);
+    addInstanced(scene, part.geo, part.mat,
+      lampMatrices.map((m) => m.clone().multiply(localM)));
+  }
+  addInstanced(scene, new THREE.PlaneGeometry(22, 22), new THREE.MeshBasicMaterial({
+    map: lightPoolTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  }), poolMatrices);
+
+  // 7) 지상 빌딩 스카이라인 (에셋 타입별 인스턴싱, 색은 instanceColor)
+  const WINDOW_VARIANTS = [
+    { color: new THREE.Color(0xffc978), p: 0.45 }, // 따뜻한 불빛
+    { color: new THREE.Color(0x9fc0ff), p: 0.25 }, // 차가운 불빛
+    { color: new THREE.Color(0x0d1018), p: 0.3 },  // 소등
+  ];
+  const buildingLists = { buildingA: [], buildingB: [] };
   const coarse = samples.filter((_, i) => i % 8 === 0).map((s) => s.pos);
   for (const side of [-1, 1]) {
     let i = Math.floor(rng() * 6);
@@ -277,46 +318,46 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
 
       if (minDistToTrack(x, z, coarse) >= Math.min(off - 1, 12)) {
         const accent = pick(rng, palette.accents);
-        const building = instantiate(rng() > 0.5 ? 'buildingA' : 'buildingB', {
-          Facade: lerpColor(accent, 0x2a2e40, 0.75).getHex(), // 야간: 외벽 어둡게
-        });
-        // 창문: 빌딩 단위로 불빛 배리에이션
         const roll = rng();
         let acc = 0;
-        let winMat = winVars[winVars.length - 1].mat;
-        for (const v of winVars) {
+        let winColor = WINDOW_VARIANTS[WINDOW_VARIANTS.length - 1].color;
+        for (const v of WINDOW_VARIANTS) {
           acc += v.p;
-          if (roll < acc) { winMat = v.mat; break; }
+          if (roll < acc) { winColor = v.color; break; }
         }
-        building.traverse((o) => {
-          if (o.isMesh) {
-            const swap = (m) => (m.name === 'Window' ? winMat : m);
-            o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
-          }
+        const type = rng() > 0.5 ? 'buildingA' : 'buildingB';
+        buildingLists[type].push({
+          matrix: composeMatrix(
+            new THREE.Vector3(x, 0, z),
+            Math.atan2(-s.left.x * side, -s.left.z * side),
+            new THREE.Vector3(sc, scy, sc)
+          ),
+          facade: lerpColor(pick(rng, [accent]), 0x2a2e40, 0.75),
+          window: winColor,
         });
-        building.scale.set(sc, scy, sc);
-        building.position.set(x, 0, z);
-        building.rotation.y = Math.atan2(-s.left.x * side, -s.left.z * side);
-        scene.add(building);
       }
       i += Math.max(3, Math.round((alongWidth + 1.2) / segLen));
     }
   }
+  buildInstancedBuildings(scene, 'buildingA', buildingLists.buildingA);
+  buildInstancedBuildings(scene, 'buildingB', buildingLists.buildingB);
 
-  // 8) 원경 산맥 (밤 실루엣)
-  const mountainColor = lerpColor(palette.skyHorizon, 0x090b16, 0.7);
+  // 8) 원경 산맥 (단위 콘 + 인스턴스 스케일)
+  const mountainMatrices = [];
   for (let i = 0; i < 26; i++) {
     const angle = (i / 26) * Math.PI * 2 + range(rng, -0.1, 0.1);
     const dist = range(rng, 750, 1050);
     const height = range(rng, 90, 220);
-    const mountain = new THREE.Mesh(
-      new THREE.ConeGeometry(range(rng, 120, 240), height, 5),
-      new THREE.MeshLambertMaterial({ color: mountainColor })
-    );
-    mountain.position.set(Math.cos(angle) * dist, height / 2 - 8, Math.sin(angle) * dist);
-    mountain.rotation.y = rng() * Math.PI;
-    scene.add(mountain);
+    const radius = range(rng, 120, 240);
+    mountainMatrices.push(composeMatrix(
+      new THREE.Vector3(Math.cos(angle) * dist, height / 2 - 8, Math.sin(angle) * dist),
+      rng() * Math.PI,
+      new THREE.Vector3(radius, height, radius)
+    ));
   }
+  addInstanced(scene, new THREE.ConeGeometry(1, 1, 5),
+    new THREE.MeshLambertMaterial({ color: lerpColor(palette.skyHorizon, 0x090b16, 0.7) }),
+    mountainMatrices);
 
   return { lampHeads };
 }

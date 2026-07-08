@@ -214,6 +214,11 @@ export class Game {
     this.prevProgress = 0;
     this.prevGateSampleIdx = 0;
 
+    // 개발용 렌더 통계 (?stats=1): 드로우콜/삼각형 수를 좌상단 힌트에 표시
+    // 컴포저가 패스마다 info를 리셋하므로 수동 리셋으로 프레임 전체를 집계
+    this.showStats = new URLSearchParams(location.search).get('stats') === '1';
+    if (this.showStats) this.renderer.info.autoReset = false;
+
     this.bindInput();
     this.onResize = () => {
       if (this.disposed) return;
@@ -507,7 +512,14 @@ export class Game {
     this.updateCamera();
     this.updateSun();
     this.updateLampLights();
+    if (this.showStats) this.renderer.info.reset();
     this.composer.render();
+
+    if (this.showStats) {
+      const r = this.renderer.info.render;
+      const el = document.querySelector('.controls-hint');
+      if (el) el.textContent = `draw calls: ${r.calls} · tris: ${(r.triangles / 1000).toFixed(0)}k`;
+    }
   }
 
   dispose() {
