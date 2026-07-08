@@ -64,6 +64,13 @@ function tinted(original, hex) {
   return tintedMats.get(key);
 }
 
+// 인스턴싱용: 캐시된 원본 씬을 그대로 반환 (수정 금지, 지오메트리/머티리얼 참조용)
+export function getAssetTemplate(name) {
+  const src = cache[name];
+  if (!src) throw new Error(`에셋 미로드: ${name} (loadGameAssets 선행 필요)`);
+  return src;
+}
+
 // tints: { 머티리얼이름: 0xRRGGBB }
 export function instantiate(name, tints = {}) {
   const src = cache[name];
