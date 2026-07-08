@@ -43,6 +43,12 @@ function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, yBa
       const y0 = s.pos.y + yBase;
       positions.push(bx, y0, bz, bx, y0 + height, bz);
       uvs.push(dist / 6, 0, dist / 6, 1);
+    } else if (offset > 0 && side !== 0) {
+      // 사이드 밴드: 중심선에서 offset만큼 떨어진 폭 2*wHalf 띠 (LED 반사 번짐 등)
+      const l = s.pos.clone().addScaledVector(s.left, (offset + wHalf) * side);
+      const r = s.pos.clone().addScaledVector(s.left, (offset - wHalf) * side);
+      positions.push(l.x, l.y + yBase, l.z, r.x, r.y + yBase, r.z);
+      uvs.push(0, dist / 10, 1, dist / 10);
     } else {
       const l = s.pos.clone().addScaledVector(s.left, wHalf);
       const r = s.pos.clone().addScaledVector(s.left, -wHalf);
@@ -203,6 +209,13 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     scene.add(new THREE.Mesh(
       trackRibbon(samples, { offset: parapetOffset, side, height: 0.12, yBase: PARAPET_HEIGHT }),
       stripMat
+    ));
+    // 젖은 노면에 어리는 LED 스트립 반사 번짐 (가산이라 어두운 색 = 은은)
+    scene.add(new THREE.Mesh(
+      trackRibbon(samples, { offset: parapetOffset - 1.0, side, wHalf: 0.9, yBase: 0.035 }),
+      new THREE.MeshBasicMaterial({
+        color: 0x241b0e, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+      })
     ));
   }
 
