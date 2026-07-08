@@ -63,18 +63,37 @@ function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, yBa
   return geo;
 }
 
-// 가로등 빛 웅덩이 데칼 텍스처 (방사형 그라디언트)
+// 가로등 빛 웅덩이 데칼 텍스처 — 가우시안처럼 완만하게 감쇠해야 원판 티가 안 남
 function lightPoolTexture() {
   const canvas = document.createElement('canvas');
-  canvas.width = 128;
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(128, 128, 2, 128, 128, 128);
+  g.addColorStop(0, 'rgba(255,232,195,0.34)');
+  g.addColorStop(0.25, 'rgba(255,222,175,0.20)');
+  g.addColorStop(0.55, 'rgba(255,210,155,0.08)');
+  g.addColorStop(0.8, 'rgba(255,200,140,0.025)');
+  g.addColorStop(1, 'rgba(255,195,130,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(canvas);
+}
+
+// 볼륨 라이트 콘 텍스처 — 상단(램프)은 밝고 아래로 은은하게 사라짐
+// 가산 블렌딩에서 검정 = 투명이므로 색만으로 페이드 표현
+function lightConeTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
   canvas.height = 128;
   const ctx = canvas.getContext('2d');
-  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
-  g.addColorStop(0, 'rgba(255,214,150,0.85)');
-  g.addColorStop(0.5, 'rgba(255,190,110,0.28)');
-  g.addColorStop(1, 'rgba(255,180,90,0)');
+  const g = ctx.createLinearGradient(0, 0, 0, 128);
+  // 가산 + 양면이라 값이 2배로 겹침 — 아주 어둡게 깔아야 "은은"해진다
+  g.addColorStop(0, 'rgba(46,38,26,1)');
+  g.addColorStop(0.45, 'rgba(20,16,11,1)');
+  g.addColorStop(1, 'rgba(0,0,0,1)');        // 바닥에서 소멸
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 128, 128);
+  ctx.fillRect(0, 0, 32, 128);
   return new THREE.CanvasTexture(canvas);
 }
 
@@ -87,7 +106,7 @@ function windowVariants() {
   ];
 }
 
-function makeLamp(headMat, poleMat) {
+function makeLamp(headMat, poleMat, coneMat) {
   const lamp = new THREE.Group();
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 5.2, 8), poleMat);
   pole.position.y = 2.6;
@@ -95,9 +114,16 @@ function makeLamp(headMat, poleMat) {
   const arm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 2.0), poleMat);
   arm.position.set(0, 5.1, 0.9);
   lamp.add(arm);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.8), headMat);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.68), headMat);
   head.position.set(0, 5.0, 1.75);
   lamp.add(head);
+  // 볼륨 라이트 콘: 헤드에서 도로로 은은하게 쏟아지는 빛기둥
+  const cone = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.28, 3.4, 5.3, 14, 1, true),
+    coneMat
+  );
+  cone.position.set(0, 2.35, 1.75);
+  lamp.add(cone);
   return lamp;
 }
 
@@ -164,24 +190,32 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     scene.add(pier);
   }
 
-  // 6) 가로등 (양쪽 교차, 발광 헤드 + 도로 위 빛 웅덩이)
-  const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0xffe7b8 });
+  // 6) 가로등 (양쪽 교차): 발광 헤드 + 볼륨 라이트 콘 + 소프트 빛 웅덩이
+  //    실제 광원은 game.js가 차 근처 가로등 3개에만 풀링해서 붙인다
+  const lampHeads = [];
+  const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0xfff1d4 });
   const lampPoleMat = new THREE.MeshLambertMaterial({ color: 0x3a3d47 });
-  const poolTex = lightPoolTexture();
+  const coneMat = new THREE.MeshBasicMaterial({
+    map: lightConeTexture(), transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, side: THREE.DoubleSide,
+  });
   const poolMat = new THREE.MeshBasicMaterial({
-    map: poolTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    map: lightPoolTexture(), transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false,
   });
   const lampStep = Math.max(1, Math.round(30 / segLen));
   let lampIdx = 0;
   for (let i = 0; i < n; i += lampStep) {
     const s = samples[i];
     const side = lampIdx++ % 2 === 0 ? 1 : -1;
-    const lamp = makeLamp(lampHeadMat, lampPoleMat);
+    const lamp = makeLamp(lampHeadMat, lampPoleMat, coneMat);
     lamp.position.copy(s.pos).addScaledVector(s.left, (parapetOffset - 0.35) * side);
     lamp.rotation.y = Math.atan2(-s.left.x * side, -s.left.z * side); // 헤드가 도로 쪽으로
     scene.add(lamp);
+    lamp.updateMatrixWorld(true);
+    lampHeads.push(lamp.localToWorld(new THREE.Vector3(0, 5.0, 1.75)));
 
-    const pool = new THREE.Mesh(new THREE.PlaneGeometry(13, 13), poolMat);
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(22, 22), poolMat);
     pool.rotation.x = -Math.PI / 2;
     pool.position.copy(s.pos)
       .addScaledVector(s.left, (parapetOffset - 2.1) * side)
@@ -246,4 +280,6 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     mountain.rotation.y = rng() * Math.PI;
     scene.add(mountain);
   }
+
+  return { lampHeads };
 }
