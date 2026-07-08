@@ -8,7 +8,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { generateTrack, buildRoadMesh, buildStartLine } from '../map/trackGenerator.js';
 import { ParticleSystem } from './particles.js';
-import { scatterDecorations } from '../map/decorations.js';
+import { buildEnvironment } from '../map/decorations.js';
 import {
   placePhotoGates,
   placeHolograms,
@@ -116,7 +116,8 @@ export class Game {
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(this.palette.fog, 250, 1300);
+    // 안개를 당겨서 코리도 너머 원경(지면)이 빨리 묻히게
+    this.scene.fog = new THREE.Fog(this.palette.fog, 180, 950);
 
     this.camera = new THREE.PerspectiveCamera(
       BASE_FOV,
@@ -170,7 +171,7 @@ export class Game {
     this.trackWidth = track.width;
     this.scene.add(buildRoadMesh(track.samples, track.width));
     this.scene.add(buildStartLine(track.samples, track.width));
-    scatterDecorations(this.scene, rng, track.samples, this.palette);
+    buildEnvironment(this.scene, rng, track.samples, this.palette, track.width);
     this.gates = placePhotoGates(this.scene, this.photos, track.samples, rng, track.width);
     this.holograms = placeHolograms(this.scene, this.photos, track.samples, rng);
     this.items = placeItems(this.scene, track.samples, rng, this.palette);
@@ -450,9 +451,22 @@ export class Game {
         this.input.left = diff > 0.05;
         this.input.right = diff < -0.05;
       }
-      const { dist } = this.findNearestSample();
-      const onRoad = dist < this.trackWidth / 2 + 1.5;
-      this.car.update(dt, this.input, onRoad);
+      this.car.update(dt, this.input, this.onRoad !== false);
+
+      // 이동 후 측면 위치 계산 → 배리어 밖으로 못 나가게 하드 클램프 (벽을 따라 미끄러짐)
+      this.findNearestSample();
+      const near = this.samples[this.currentSampleIdx];
+      const carPos = this.car.group.position;
+      const lateral =
+        (carPos.x - near.pos.x) * near.left.x + (carPos.z - near.pos.z) * near.left.z;
+      const limit = this.trackWidth / 2 + 0.6;
+      if (Math.abs(lateral) > limit) {
+        const clamped = THREE.MathUtils.clamp(lateral, -limit, limit);
+        carPos.addScaledVector(near.left, clamped - lateral);
+        this.car.speed *= 0.985; // 벽 마찰
+      }
+      this.onRoad = Math.abs(lateral) < this.trackWidth / 2 + 1;
+
       this.emitDriveParticles();
       this.checkItems();
       this.checkGates();
