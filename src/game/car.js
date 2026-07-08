@@ -72,7 +72,10 @@ export class Car {
     this.group.rotation.y = this.heading;
 
     // 시각 효과: 바퀴 회전, 코너링 시 바디 롤
-    for (const w of this.wheels) w.rotation.x += this.speed * dt * 2;
+    // 물리적으로 정확한 회전 속도는 고속에서 프레임당 90°+ 돌아가 스트로빙
+    // (순간이동처럼 보임) → 시각적 회전 속도에 상한을 둔다
+    const spinRate = THREE.MathUtils.clamp(this.speed * 2, -9, 9); // rad/s
+    for (const w of this.wheels) w.rotateX(spinRate * dt);
     this.group.rotation.z = THREE.MathUtils.lerp(
       this.group.rotation.z,
       steer * speedRatio * 0.06,
