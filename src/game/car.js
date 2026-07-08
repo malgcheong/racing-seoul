@@ -1,6 +1,7 @@
-// 아케이드 차량 물리 + 로우폴리 차량 모델
+// 아케이드 차량 물리 + Blender 제작 로우폴리 차량 모델
 
 import * as THREE from 'three';
+import { instantiate } from '../utils/assets.js';
 
 const ACCEL = 42;
 const BRAKE = 70;
@@ -12,51 +13,16 @@ const STEER_RATE = 2.2;
 
 export class Car {
   constructor(color = 0xff5533) {
-    this.group = this.buildModel(color);
+    // Blender 에셋(car.glb): Body + Wheel_FL/FR/RL/RR, CarPaint 머티리얼을 팔레트 색으로 틴트
+    this.group = new THREE.Group();
+    const model = instantiate('car', { CarPaint: color });
+    this.group.add(model);
+    this.wheels = ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']
+      .map((n) => model.getObjectByName(n))
+      .filter(Boolean);
     this.speed = 0;
     this.heading = 0;
     this.boostTimer = 0;
-    this.wheels = this.group.userData.wheels;
-  }
-
-  buildModel(color) {
-    const group = new THREE.Group();
-
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 0.8, 4.4),
-      new THREE.MeshLambertMaterial({ color })
-    );
-    body.position.y = 0.85;
-    group.add(body);
-
-    const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(1.8, 0.7, 2.0),
-      new THREE.MeshLambertMaterial({ color: 0x1c2333 })
-    );
-    cabin.position.set(0, 1.55, -0.2);
-    group.add(cabin);
-
-    const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 12);
-    wheelGeo.rotateZ(Math.PI / 2);
-    const wheelMat = new THREE.MeshLambertMaterial({ color: 0x14151c });
-    const wheels = [];
-    for (const [x, z] of [[-1.15, 1.4], [1.15, 1.4], [-1.15, -1.4], [1.15, -1.4]]) {
-      const w = new THREE.Mesh(wheelGeo, wheelMat);
-      w.position.set(x, 0.5, z);
-      group.add(w);
-      wheels.push(w);
-    }
-
-    // 헤드라이트
-    const lightMat = new THREE.MeshBasicMaterial({ color: 0xfff2c9 });
-    for (const x of [-0.7, 0.7]) {
-      const l = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.25, 0.1), lightMat);
-      l.position.set(x, 0.9, 2.2);
-      group.add(l);
-    }
-
-    group.userData.wheels = wheels;
-    return group;
   }
 
   placeAt(position, heading) {
