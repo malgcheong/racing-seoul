@@ -4,6 +4,7 @@ import { analyzePhotos, buildPalette } from './analysis/photoAnalyzer.js';
 import { Game } from './game/game.js';
 import { generateDemoPhotos } from './ui/demoPhotos.js';
 import { processImageFile } from './utils/imageProcess.js';
+import { loadGameAssets } from './utils/assets.js';
 
 const MIN_PHOTOS = 5;   // MVP 최소 장수 (정식 명세 2.2.5는 10장)
 const MAX_PHOTOS = 50;  // 명세 2.1.3
@@ -138,6 +139,7 @@ async function generateAndPlay(reuseSeedSuffix) {
 
   // 2) 지형/배경/오브젝트 (Three.js 씬 구성은 빠르므로 연출을 겸한 단계 표시)
   await setGenStep('지형 생성 중…', 50, 68, '사진의 분위기로 트랙 곡선을 그리는 중');
+  await loadGameAssets(); // Blender 제작 GLB (최초 1회만 실제 로드)
   await new Promise((r) => setTimeout(r, 450));
   await setGenStep('배경 생성 중…', 68, 84, '하늘과 지평선을 칠하는 중');
   await new Promise((r) => setTimeout(r, 450));
