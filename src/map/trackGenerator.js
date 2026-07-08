@@ -67,6 +67,33 @@ function createRoadTexture() {
   return tex;
 }
 
+// 젖은 노면용 러프니스 맵: 어두운 얼룩 = 물웅덩이(매끈=반사↑), 밝은 부분 = 마른 아스팔트
+function createRoughnessTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#b4b4b4';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 16; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    const r = 26 + Math.random() * 52;
+    const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+    g.addColorStop(0, 'rgba(28,28,28,0.9)');
+    g.addColorStop(0.6, 'rgba(48,48,48,0.5)');
+    g.addColorStop(1, 'rgba(90,90,90,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * (0.7 + Math.random() * 0.6), r, Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
 export function buildRoadMesh(samples, width) {
   const half = width / 2;
   const positions = [];
@@ -99,7 +126,14 @@ export function buildRoadMesh(samples, width) {
   geo.setIndex(indices);
   geo.computeVertexNormals();
 
-  const mat = new THREE.MeshLambertMaterial({ map: createRoadTexture() });
+  // 젖은 노면: 물웅덩이 패치는 매끈해서 가로등/헤드라이트 스페큘러가 어린다
+  const mat = new THREE.MeshStandardMaterial({
+    map: createRoadTexture(),
+    roughnessMap: createRoughnessTexture(),
+    roughness: 1.0,   // roughnessMap 값이 그대로 적용되도록
+    metalness: 0.06,
+    color: 0xaeb2bc,  // 젖은 아스팔트는 살짝 어둡고 차갑게
+  });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;

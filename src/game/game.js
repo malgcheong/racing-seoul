@@ -63,8 +63,8 @@ const VignetteShader = {
   `,
 };
 
-function makeSky(palette) {
-  const geo = new THREE.SphereGeometry(1600, 24, 16);
+function makeSky(palette, radius = 1600) {
+  const geo = new THREE.SphereGeometry(radius, 24, 16);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: {
@@ -156,6 +156,14 @@ export class Game {
     this.sun = sun;
     this.scene.add(hemi, sun, sun.target);
     this.scene.add(makeSky(this.palette));
+
+    // 하늘을 환경맵으로 구워 젖은 노면·차체에 은은한 시트(sheen) 반사
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envScene = new THREE.Scene();
+    envScene.add(makeSky(this.palette, 50));
+    this.scene.environment = pmrem.fromScene(envScene, 0.05, 0.1, 100).texture;
+    this.scene.environmentIntensity = 0.35;
+    pmrem.dispose();
 
     // 포스트프로세싱: bloom(빛 번짐) + 비네트
     this.composer = new EffectComposer(this.renderer);
