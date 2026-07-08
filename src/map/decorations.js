@@ -80,21 +80,48 @@ function lightPoolTexture() {
   return new THREE.CanvasTexture(canvas);
 }
 
-// 볼륨 라이트 콘 텍스처 — 상단(램프)은 밝고 아래로 은은하게 사라짐
-// 가산 블렌딩에서 검정 = 투명이므로 색만으로 페이드 표현
-function lightConeTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 32;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createLinearGradient(0, 0, 0, 128);
-  // 가산 + 양면이라 값이 2배로 겹침 — 아주 어둡게 깔아야 "은은"해진다
-  g.addColorStop(0, 'rgba(46,38,26,1)');
-  g.addColorStop(0.45, 'rgba(20,16,11,1)');
-  g.addColorStop(1, 'rgba(0,0,0,1)');        // 바닥에서 소멸
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 32, 128);
-  return new THREE.CanvasTexture(canvas);
+const CONE_HEIGHT = 5.3;
+
+// 볼륨 라이트 콘 셰이더 — 실루엣(시선과 면이 스치는 각)에서 소멸시켜
+// 폴리곤 고깔 윤곽을 지운다. 빛기둥을 두껍게 관통하는 중심부만 은은하게 남음.
+function makeConeMaterial() {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uColor: { value: new THREE.Color(0xffdfae) },
+      uIntensity: { value: 0.38 },
+      uHeight: { value: CONE_HEIGHT },
+    },
+    vertexShader: `
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      varying float vH; // 0=바닥, 1=램프 헤드
+      uniform float uHeight;
+      void main() {
+        vNormal = normalize(normalMatrix * normal);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vViewDir = normalize(-mv.xyz);
+        vH = clamp(position.y / uHeight + 0.5, 0.0, 1.0);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uIntensity;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      varying float vH;
+      void main() {
+        float facing = abs(dot(normalize(vNormal), normalize(vViewDir)));
+        float edgeFade = pow(facing, 2.4);   // 실루엣 가장자리 소멸
+        float vertical = pow(vH, 1.7);       // 아래로 갈수록 소멸
+        gl_FragColor = vec4(uColor, edgeFade * vertical * uIntensity);
+      }
+    `,
+  });
 }
 
 // 창문 발광 배리에이션 (빌딩 단위로 랜덤 적용)
@@ -119,7 +146,7 @@ function makeLamp(headMat, poleMat, coneMat) {
   lamp.add(head);
   // 볼륨 라이트 콘: 헤드에서 도로로 은은하게 쏟아지는 빛기둥
   const cone = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.28, 3.4, 5.3, 14, 1, true),
+    new THREE.CylinderGeometry(0.28, 3.6, CONE_HEIGHT, 24, 1, true),
     coneMat
   );
   cone.position.set(0, 2.35, 1.75);
@@ -195,10 +222,7 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
   const lampHeads = [];
   const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0xfff1d4 });
   const lampPoleMat = new THREE.MeshLambertMaterial({ color: 0x3a3d47 });
-  const coneMat = new THREE.MeshBasicMaterial({
-    map: lightConeTexture(), transparent: true, blending: THREE.AdditiveBlending,
-    depthWrite: false, side: THREE.DoubleSide,
-  });
+  const coneMat = makeConeMaterial();
   const poolMat = new THREE.MeshBasicMaterial({
     map: lightPoolTexture(), transparent: true, blending: THREE.AdditiveBlending,
     depthWrite: false,
