@@ -176,7 +176,15 @@ export class Game {
     this.trackWidth = track.width;
     this.scene.add(buildRoadMesh(track.samples, track.width));
     this.scene.add(buildStartLine(track.samples, track.width));
-    buildEnvironment(this.scene, rng, track.samples, this.palette, track.width);
+    const env = buildEnvironment(this.scene, rng, track.samples, this.palette, track.width);
+    this.lampHeads = env.lampHeads;
+    // 실제 광원은 3개만 풀링: 매 프레임 차에서 가장 가까운 가로등 3개로 이동
+    this.lampLights = [];
+    for (let i = 0; i < 3; i++) {
+      const light = new THREE.PointLight(0xffdfae, 170, 32, 1.9);
+      this.scene.add(light);
+      this.lampLights.push(light);
+    }
     this.gates = placePhotoGates(this.scene, this.photos, track.samples, rng, track.width);
     this.holograms = placeHolograms(this.scene, this.photos, track.samples, rng);
 
@@ -313,6 +321,18 @@ export class Game {
 
     const lookAt = car.position.clone().add(new THREE.Vector3(0, 1.8, 0));
     this.camera.lookAt(lookAt);
+  }
+
+  // 풀링된 실광원을 차에서 가장 가까운 가로등 3개에 배치
+  updateLampLights() {
+    if (!this.lampHeads.length) return;
+    const pos = this.car.group.position;
+    const ranked = this.lampHeads
+      .map((p) => ({ p, d: p.distanceToSquared(pos) }))
+      .sort((a, b) => a.d - b.d);
+    for (let i = 0; i < this.lampLights.length; i++) {
+      this.lampLights[i].position.copy(ranked[i].p);
+    }
   }
 
   // 태양(그림자 카메라)이 차량을 따라다니며 주변에만 고해상도 그림자를 드리움
@@ -478,6 +498,7 @@ export class Game {
     this.particles.update(rawDt);
     this.updateCamera();
     this.updateSun();
+    this.updateLampLights();
     this.composer.render();
   }
 
