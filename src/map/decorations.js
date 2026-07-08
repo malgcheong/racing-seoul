@@ -1,14 +1,15 @@
-// 코리도(도심 서킷) 환경 구성
-// 도로 양쪽을 연속 배리어 + 빌딩/나무 행렬로 항상 채워서
-// 시야에 맨땅이 보이지 않게 하고, 도로 밖을 시각적으로도 막는다.
-// (물리적 차단은 game.js의 측면 클램프가 담당)
+// 야간 고가도로 환경 구성
+// - 데크: 갓길 포장 + 측면 스커트(거더) + 어두운 파라펫 + 상단 LED 라이트 스트립
+// - 교각이 일정 간격으로 지상까지 내려감
+// - 데크 아래·옆으로 불 켜진 빌딩 스카이라인 (창문 발광 랜덤)
+// - 가로등: 발광 헤드 + 도로 위 빛 웅덩이 데칼 (실제 광원 없이 야간 연출)
 
 import * as THREE from 'three';
 import { pick, range } from '../utils/rng.js';
 import { instantiate } from '../utils/assets.js';
 
-const BARRIER_HEIGHT = 2.3;
-const SHOULDER = 2.2;          // 도로 가장자리 → 배리어까지 갓길 폭
+const SHOULDER = 2.2;        // 도로 가장자리 → 파라펫까지 갓길 폭
+const PARAPET_HEIGHT = 1.15;
 
 function lerpColor(a, b, t) {
   return new THREE.Color(a).lerp(new THREE.Color(b), t);
@@ -25,27 +26,8 @@ function minDistToTrack(x, z, coarse) {
   return Math.sqrt(min);
 }
 
-// 배리어 스트라이프 텍스처 (팔레트 색 + 흰색 교차)
-function barrierTexture(accentHex) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 32;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#' + new THREE.Color(accentHex).getHexString();
-  ctx.fillRect(0, 0, 32, 32);
-  ctx.fillStyle = '#f2f0ea';
-  ctx.fillRect(32, 0, 32, 32);
-  // 하단 어두운 밑단
-  ctx.fillStyle = 'rgba(20,22,30,0.35)';
-  ctx.fillRect(0, 24, 64, 8);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  return tex;
-}
-
-// 트랙을 따라가는 리본 지오메트리 (평면: y 고정 폭 wHalf / 수직: 높이 h)
-function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, y = 0 }) {
+// 트랙을 따라가는 리본 지오메트리 (height>0: 수직 벽 / 아니면: 수평 데크)
+function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, yBase = 0 }) {
   const positions = [];
   const uvs = [];
   const indices = [];
@@ -56,16 +38,15 @@ function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, y =
     const s = samples[i % n];
     if (i > 0) dist += s.pos.distanceTo(samples[(i - 1) % n].pos);
     if (height > 0) {
-      // 수직 리본 (배리어)
       const bx = s.pos.x + s.left.x * offset * side;
       const bz = s.pos.z + s.left.z * offset * side;
-      positions.push(bx, y, bz, bx, y + height, bz);
+      const y0 = s.pos.y + yBase;
+      positions.push(bx, y0, bz, bx, y0 + height, bz);
       uvs.push(dist / 6, 0, dist / 6, 1);
     } else {
-      // 수평 리본 (갓길 포장)
       const l = s.pos.clone().addScaledVector(s.left, wHalf);
       const r = s.pos.clone().addScaledVector(s.left, -wHalf);
-      positions.push(l.x, y, l.z, r.x, y, r.z);
+      positions.push(l.x, l.y + yBase, l.z, r.x, r.y + yBase, r.z);
       uvs.push(0, dist / 10, 1, dist / 10);
     }
     if (i < n) {
@@ -82,9 +63,48 @@ function trackRibbon(samples, { offset = 0, side = 0, wHalf = 0, height = 0, y =
   return geo;
 }
 
+// 가로등 빛 웅덩이 데칼 텍스처 (방사형 그라디언트)
+function lightPoolTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,214,150,0.85)');
+  g.addColorStop(0.5, 'rgba(255,190,110,0.28)');
+  g.addColorStop(1, 'rgba(255,180,90,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(canvas);
+}
+
+// 창문 발광 배리에이션 (빌딩 단위로 랜덤 적용)
+function windowVariants() {
+  return [
+    { mat: new THREE.MeshBasicMaterial({ color: 0xffc978 }), p: 0.45 }, // 따뜻한 불빛
+    { mat: new THREE.MeshBasicMaterial({ color: 0x9fc0ff }), p: 0.25 }, // 차가운 불빛
+    { mat: new THREE.MeshBasicMaterial({ color: 0x0d1018 }), p: 0.3 },  // 소등
+  ];
+}
+
+function makeLamp(headMat, poleMat) {
+  const lamp = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 5.2, 8), poleMat);
+  pole.position.y = 2.6;
+  lamp.add(pole);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 2.0), poleMat);
+  arm.position.set(0, 5.1, 0.9);
+  lamp.add(arm);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.8), headMat);
+  head.position.set(0, 5.0, 1.75);
+  lamp.add(head);
+  return lamp;
+}
+
 export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
   const halfW = roadWidth / 2;
-  const barrierOffset = halfW + SHOULDER;
+  const parapetOffset = halfW + SHOULDER;
+  const deckY = samples[0].pos.y;
   const n = samples.length;
   const segLen = (() => {
     let total = 0;
@@ -92,92 +112,128 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     return total / n;
   })();
 
-  // 1) 지면: 어둡게 처리해 울타리 너머로 보여도 "맨땅"으로 읽히지 않게
-  const groundColor = lerpColor(palette.ground, 0x0c0e18, 0.62);
+  // 1) 지상: 야간 도시 바닥 (아주 어둡게)
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(1400, 48),
-    new THREE.MeshLambertMaterial({ color: groundColor })
+    new THREE.MeshLambertMaterial({ color: lerpColor(palette.ground, 0x04050a, 0.8) })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.05;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // 2) 갓길 포장 (도로보다 살짝 아래, 콘크리트색)
+  // 2) 데크 갓길 포장 (도로보다 살짝 아래, 어두운 콘크리트)
   const apron = new THREE.Mesh(
-    trackRibbon(samples, { wHalf: barrierOffset + 0.3, y: 0.005 }),
-    new THREE.MeshLambertMaterial({ color: lerpColor(0x8d8f96, palette.ground, 0.2) })
+    trackRibbon(samples, { wHalf: parapetOffset + 0.35, yBase: -0.015 }),
+    new THREE.MeshLambertMaterial({ color: 0x3c3e46 })
   );
   apron.receiveShadow = true;
   scene.add(apron);
 
-  // 3) 연속 배리어 (양쪽, 스트라이프)
-  const stripeTex = barrierTexture(palette.accents[0]);
-  const barrierMat = new THREE.MeshBasicMaterial({ map: stripeTex, side: THREE.DoubleSide });
+  // 3) 데크 측면 스커트(거더) — 아래에서 봐도 고가답게
+  const skirtMat = new THREE.MeshBasicMaterial({ color: 0x1b1d26, side: THREE.DoubleSide });
   for (const side of [-1, 1]) {
-    const barrier = new THREE.Mesh(
-      trackRibbon(samples, { offset: barrierOffset, side, height: BARRIER_HEIGHT }),
-      barrierMat
-    );
-    scene.add(barrier);
+    scene.add(new THREE.Mesh(
+      trackRibbon(samples, { offset: parapetOffset + 0.35, side, height: 2.4, yBase: -2.4 }),
+      skirtMat
+    ));
   }
 
-  // 4) 배리어 뒤 빌딩/나무 행렬 — 양쪽을 빈틈 없이 채운다
-  const coarse = samples.filter((_, i) => i % 8 === 0).map((s) => s.pos);
+  // 4) 파라펫(어두운 방호벽) + 상단 LED 라이트 스트립
+  const parapetMat = new THREE.MeshBasicMaterial({ color: 0x31343e, side: THREE.DoubleSide });
+  const stripMat = new THREE.MeshBasicMaterial({ color: 0xffd9a2, side: THREE.DoubleSide });
+  for (const side of [-1, 1]) {
+    scene.add(new THREE.Mesh(
+      trackRibbon(samples, { offset: parapetOffset, side, height: PARAPET_HEIGHT }),
+      parapetMat
+    ));
+    scene.add(new THREE.Mesh(
+      trackRibbon(samples, { offset: parapetOffset, side, height: 0.12, yBase: PARAPET_HEIGHT }),
+      stripMat
+    ));
+  }
 
+  // 5) 교각 (일정 간격, 지상 → 데크)
+  const pierMat = new THREE.MeshLambertMaterial({ color: 0x272a34 });
+  const pierStep = Math.max(1, Math.round(38 / segLen));
+  for (let i = 0; i < n; i += pierStep) {
+    const s = samples[i];
+    const pier = new THREE.Mesh(new THREE.BoxGeometry(3.6, deckY, 2.6), pierMat);
+    pier.position.set(s.pos.x, deckY / 2 - 0.1, s.pos.z);
+    pier.rotation.y = Math.atan2(s.tangent.x, s.tangent.z);
+    scene.add(pier);
+  }
+
+  // 6) 가로등 (양쪽 교차, 발광 헤드 + 도로 위 빛 웅덩이)
+  const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0xffe7b8 });
+  const lampPoleMat = new THREE.MeshLambertMaterial({ color: 0x3a3d47 });
+  const poolTex = lightPoolTexture();
+  const poolMat = new THREE.MeshBasicMaterial({
+    map: poolTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const lampStep = Math.max(1, Math.round(30 / segLen));
+  let lampIdx = 0;
+  for (let i = 0; i < n; i += lampStep) {
+    const s = samples[i];
+    const side = lampIdx++ % 2 === 0 ? 1 : -1;
+    const lamp = makeLamp(lampHeadMat, lampPoleMat);
+    lamp.position.copy(s.pos).addScaledVector(s.left, (parapetOffset - 0.35) * side);
+    lamp.rotation.y = Math.atan2(-s.left.x * side, -s.left.z * side); // 헤드가 도로 쪽으로
+    scene.add(lamp);
+
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(13, 13), poolMat);
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.copy(s.pos)
+      .addScaledVector(s.left, (parapetOffset - 2.1) * side)
+      .setY(deckY + 0.04);
+    scene.add(pool);
+  }
+
+  // 7) 지상 빌딩 스카이라인 (양 사이드 상시 채움, 창문 불빛 랜덤)
+  const winVars = windowVariants();
+  const coarse = samples.filter((_, i) => i % 8 === 0).map((s) => s.pos);
   for (const side of [-1, 1]) {
     let i = Math.floor(rng() * 6);
     while (i < n) {
       const s = samples[i];
-      const isTree = rng() < 0.28;
-      let alongWidth;
+      const sc = range(rng, 0.85, 1.4);
+      const scy = range(rng, 0.7, 2.1);
+      const depthHalf = 4.4 * sc;
+      const off = parapetOffset + 4.5 + depthHalf;
+      const x = s.pos.x + s.left.x * off * side;
+      const z = s.pos.z + s.left.z * off * side;
+      const alongWidth = 8.6 * sc;
 
-      if (isTree) {
-        // 나무 클러스터: 배리어 바로 뒤에 2그루
-        alongWidth = 9;
-        for (const dAlong of [-2.2, 2.4]) {
-          const scale = range(rng, 1.7, 2.6);
-          const off = barrierOffset + range(rng, 2.2, 4.5);
-          const x = s.pos.x + s.left.x * off * side + s.tangent.x * dAlong;
-          const z = s.pos.z + s.left.z * off * side + s.tangent.z * dAlong;
-          const accent = pick(rng, palette.accents);
-          const tree = instantiate(rng() > 0.45 ? 'treeRound' : 'treePine', {
-            Foliage: lerpColor(accent, 0x2e8b3d, 0.55).getHex(),
-          });
-          tree.scale.setScalar(scale);
-          tree.position.set(x, 0, z);
-          tree.rotation.y = rng() * Math.PI * 2;
-          scene.add(tree);
+      if (minDistToTrack(x, z, coarse) >= Math.min(off - 1, 12)) {
+        const accent = pick(rng, palette.accents);
+        const building = instantiate(rng() > 0.5 ? 'buildingA' : 'buildingB', {
+          Facade: lerpColor(accent, 0x2a2e40, 0.75).getHex(), // 야간: 외벽 어둡게
+        });
+        // 창문: 빌딩 단위로 불빛 배리에이션
+        const roll = rng();
+        let acc = 0;
+        let winMat = winVars[winVars.length - 1].mat;
+        for (const v of winVars) {
+          acc += v.p;
+          if (roll < acc) { winMat = v.mat; break; }
         }
-      } else {
-        // 빌딩: 정면(창문)이 도로를 향하도록 정렬
-        const sc = range(rng, 0.85, 1.35);
-        const scy = range(rng, 0.6, 1.6);
-        const depthHalf = 4.4 * sc;
-        const off = barrierOffset + 0.4 + depthHalf;
-        const x = s.pos.x + s.left.x * off * side;
-        const z = s.pos.z + s.left.z * off * side;
-        alongWidth = 8.6 * sc;
-
-        // 다른 트랙 구간을 침범하면 이 자리는 배리어만 남기고 건너뜀
-        if (minDistToTrack(x, z, coarse) >= Math.min(off - 1, 11)) {
-          const accent = pick(rng, palette.accents);
-          const building = instantiate(rng() > 0.5 ? 'buildingA' : 'buildingB', {
-            Facade: lerpColor(accent, 0x8890a8, 0.45).getHex(),
-          });
-          building.scale.set(sc, scy, sc);
-          building.position.set(x, 0, z);
-          // 로컬 Z(창문 면)가 도로 쪽을 보도록
-          building.rotation.y = Math.atan2(-s.left.x * side, -s.left.z * side);
-          scene.add(building);
-        }
+        building.traverse((o) => {
+          if (o.isMesh) {
+            const swap = (m) => (m.name === 'Window' ? winMat : m);
+            o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+          }
+        });
+        building.scale.set(sc, scy, sc);
+        building.position.set(x, 0, z);
+        building.rotation.y = Math.atan2(-s.left.x * side, -s.left.z * side);
+        scene.add(building);
       }
-      i += Math.max(3, Math.round((alongWidth + 0.8) / segLen));
+      i += Math.max(3, Math.round((alongWidth + 1.2) / segLen));
     }
   }
 
-  // 5) 원경 산맥 (빌딩 위 스카이라인)
-  const mountainColor = lerpColor(palette.skyHorizon, 0x30364f, 0.6);
+  // 8) 원경 산맥 (밤 실루엣)
+  const mountainColor = lerpColor(palette.skyHorizon, 0x090b16, 0.7);
   for (let i = 0; i < 26; i++) {
     const angle = (i / 26) * Math.PI * 2 + range(rng, -0.1, 0.1);
     const dist = range(rng, 750, 1050);

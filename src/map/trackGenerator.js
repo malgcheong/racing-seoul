@@ -7,6 +7,7 @@ import { range } from '../utils/rng.js';
 
 export const TRACK_WIDTH = 16;
 export const SAMPLE_COUNT = 900;
+export const DECK_HEIGHT = 14; // 고가도로 데크 높이
 
 export function generateTrack(rng) {
   const pointCount = 10 + Math.floor(rng() * 4);
@@ -24,6 +25,7 @@ export function generateTrack(rng) {
   for (let i = 0; i < SAMPLE_COUNT; i++) {
     const t = i / SAMPLE_COUNT;
     const pos = curve.getPointAt(t);
+    pos.y = DECK_HEIGHT; // 고가도로: 트랙 전체를 데크 높이로
     const tangent = curve.getTangentAt(t).normalize();
     // 평면 트랙: 좌측 법선은 접선을 90도 회전
     const left = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
@@ -81,7 +83,7 @@ export function buildRoadMesh(samples, width) {
     }
     const l = s.pos.clone().addScaledVector(s.left, half);
     const r = s.pos.clone().addScaledVector(s.left, -half);
-    positions.push(l.x, 0.02, l.z, r.x, 0.02, r.z);
+    positions.push(l.x, l.y + 0.02, l.z, r.x, r.y + 0.02, r.z);
     const v = dist / 18;
     uvs.push(0, v, 1, v);
     if (i < n) {
@@ -120,10 +122,11 @@ export function buildStartLine(samples, width) {
 
   const s = samples[0];
   const geo = new THREE.PlaneGeometry(width, 4);
-  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  // 야간 눈부심 방지: 체커를 톤다운
+  const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0x8a8a8a });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.copy(s.pos).setY(0.05);
+  mesh.position.copy(s.pos).setY(s.pos.y + 0.05);
   // 트랙 진행 방향에 맞춰 회전
   mesh.rotation.z = Math.atan2(s.tangent.x, s.tangent.z);
   return mesh;

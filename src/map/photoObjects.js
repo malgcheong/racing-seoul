@@ -2,7 +2,6 @@
 // - 추억 게이트: 도로를 가로지르는 대형 사진 아치. 피해갈 수 없게 만들어
 //   통과 순간 플래시백 연출의 트리거가 된다. 트랙 순서 = 추억 여정 순서. (최소 5개 보장)
 // - 홀로그램: 반투명 사진 패널을 공중에 띄워 천천히 회전
-// - 수집 아이템: 트랙 위 오브(구슬), 획득 시 점수/부스터
 
 import * as THREE from 'three';
 import { range } from '../utils/rng.js';
@@ -129,7 +128,7 @@ export function placeHolograms(scene, photos, samples, rng) {
     const s = samples[idx];
 
     const plane = photoPlane(photo, 7, { transparent: true, opacity: 0.72 });
-    plane.position.copy(s.pos).setY(range(rng, 9, 13));
+    plane.position.copy(s.pos).setY(s.pos.y + range(rng, 9, 13));
     plane.userData.spin = range(rng, 0.2, 0.5) * (rng() > 0.5 ? 1 : -1);
     plane.userData.baseY = plane.position.y;
     plane.userData.bobPhase = rng() * Math.PI * 2;
@@ -139,44 +138,10 @@ export function placeHolograms(scene, photos, samples, rng) {
   return holos;
 }
 
-// 수집 아이템(오브) 배치 (명세 3.3 간이 구현 — 상징물 3D 모델화는 백엔드 AI 단계)
-export function placeItems(scene, samples, rng, palette) {
-  const items = [];
-  const count = 24;
-  const n = samples.length;
-
-  for (let i = 0; i < count; i++) {
-    const idx = Math.floor((i / count) * n + range(rng, -6, 6) + n) % n;
-    const s = samples[idx];
-    const lateral = range(rng, -5, 5);
-    const isBoost = i % 6 === 5;
-
-    const mesh = new THREE.Mesh(
-      isBoost
-        ? new THREE.OctahedronGeometry(1.1)
-        : new THREE.SphereGeometry(0.8, 12, 12),
-      new THREE.MeshBasicMaterial({
-        color: isBoost ? 0xff8c3a : palette.accents[i % palette.accents.length],
-      })
-    );
-    mesh.position.copy(s.pos).addScaledVector(s.left, lateral).setY(1.4);
-    mesh.userData.bobPhase = rng() * Math.PI * 2;
-    scene.add(mesh);
-
-    items.push({ mesh, isBoost, collected: false, points: isBoost ? 30 : 10 });
-  }
-  return items;
-}
-
-// 매 프레임 애니메이션 (홀로그램 회전/부유, 아이템 부유)
-export function animatePhotoObjects(holograms, items, time) {
+// 매 프레임 애니메이션 (홀로그램 회전/부유)
+export function animatePhotoObjects(holograms, time) {
   for (const h of holograms) {
     h.rotation.y += h.userData.spin * 0.016;
     h.position.y = h.userData.baseY + Math.sin(time * 1.2 + h.userData.bobPhase) * 0.6;
-  }
-  for (const it of items) {
-    if (it.collected) continue;
-    it.mesh.rotation.y += 0.03;
-    it.mesh.position.y = 1.4 + Math.sin(time * 2 + it.mesh.userData.bobPhase) * 0.3;
   }
 }

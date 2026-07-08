@@ -12,7 +12,6 @@ import { buildEnvironment } from '../map/decorations.js';
 import {
   placePhotoGates,
   placeHolograms,
-  placeItems,
   animatePhotoObjects,
 } from '../map/photoObjects.js';
 import { Car } from './car.js';
@@ -20,11 +19,23 @@ import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 
 const TOTAL_LAPS = 3;
-const ITEM_RADIUS = 3.2;
 const GATE_SLOWMO = 0.5;        // 게이트 통과 시 시간 배율 (사진을 올려다볼 여유)
 const GATE_SLOWMO_DURATION = 1.1; // 슬로모션 지속(실제 초)
 const BASE_FOV = 68;
-const MAX_SPEED_ABS = 58;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
+const MAX_SPEED_ABS = 36;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
+
+// 사진 팔레트를 야간 무드로 변환 (색조는 남기고 어둡게)
+function nightify(p) {
+  const mix = (c, target, t) => new THREE.Color(c).lerp(new THREE.Color(target), t).getHex();
+  return {
+    ...p,
+    skyTop: mix(p.skyTop, 0x04060f, 0.88),
+    skyHorizon: mix(p.skyHorizon, 0x141b38, 0.75),
+    fog: mix(p.fog, 0x0a0d1c, 0.85),
+    ground: mix(p.ground, 0x05060c, 0.8),
+    isNight: true,
+  };
+}
 
 // 화면 가장자리를 살짝 어둡게 (비네트)
 const VignetteShader = {
@@ -104,6 +115,7 @@ export class Game {
 
   build(seed) {
     const rng = createRng(seed);
+    this.palette = nightify(this.palette);
 
     // 렌더러/씬
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -112,12 +124,12 @@ export class Game {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = this.palette.isDusk ? 1.1 : 1.0;
+    this.renderer.toneMappingExposure = 0.95;
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    // 안개를 당겨서 코리도 너머 원경(지면)이 빨리 묻히게
-    this.scene.fog = new THREE.Fog(this.palette.fog, 180, 950);
+    // 야간: 안개를 당겨 원경이 어둠에 묻히게
+    this.scene.fog = new THREE.Fog(this.palette.fog, 130, 800);
 
     this.camera = new THREE.PerspectiveCamera(
       BASE_FOV,
@@ -127,16 +139,9 @@ export class Game {
     );
 
     // 조명: 하늘/지면 색을 반영한 헤미스피어 + 그림자 태양광
-    // 헤미가 세면 그림자 영역까지 밝아져 그림자가 사라진다 — 태양광 위주로
-    const hemi = new THREE.HemisphereLight(
-      this.palette.skyHorizon,
-      this.palette.ground,
-      this.palette.isDusk ? 0.45 : 0.55
-    );
-    const sun = new THREE.DirectionalLight(
-      this.palette.isDusk ? 0xffb27a : 0xfff6e8,
-      this.palette.isDusk ? 1.5 : 1.9
-    );
+    // 야간: 은은한 도시광(헤미) + 달빛(방향광, 그림자)
+    const hemi = new THREE.HemisphereLight(this.palette.skyHorizon, 0x0a0c16, 0.32);
+    const sun = new THREE.DirectionalLight(0xaabdf5, 0.7);
     this.sunDir = new THREE.Vector3(0.5, 0.72, 0.34).normalize();
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -157,7 +162,7 @@ export class Game {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(this.container.clientWidth, this.container.clientHeight),
-      0.28, 0.45, 0.82
+      0.38, 0.45, 0.72 // 야간: 광원만 은은하게 번지게 (과노출 방지)
     );
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new ShaderPass(VignetteShader));
@@ -174,15 +179,20 @@ export class Game {
     buildEnvironment(this.scene, rng, track.samples, this.palette, track.width);
     this.gates = placePhotoGates(this.scene, this.photos, track.samples, rng, track.width);
     this.holograms = placeHolograms(this.scene, this.photos, track.samples, rng);
-    this.items = placeItems(this.scene, track.samples, rng, this.palette);
 
     // 차량: 출발선에서 트랙 진행 방향으로
     const s0 = this.samples[0];
     this.car = new Car(this.palette.accents[0]);
     this.car.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     const heading = Math.atan2(s0.tangent.x, s0.tangent.z);
-    this.car.placeAt(s0.pos.clone().setY(0), heading);
+    this.car.placeAt(s0.pos.clone(), heading); // 데크 높이 그대로
     this.scene.add(this.car.group);
+
+    // 야간 헤드라이트 (차와 함께 이동하는 스포트라이트)
+    const headlight = new THREE.SpotLight(0xffedc4, 1000, 85, 0.44, 0.5, 1.7);
+    headlight.position.set(0, 2.0, 1.5);
+    headlight.target.position.set(0, -1.5, 32);
+    this.car.group.add(headlight, headlight.target);
 
     this.currentSampleIdx = 0;
     this.prevProgress = 0;
@@ -318,7 +328,7 @@ export class Game {
     const car = this.car;
     const back = new THREE.Vector3(-Math.sin(car.heading), 0, -Math.cos(car.heading));
     const rear = car.group.position.clone().addScaledVector(back, 2.4);
-    rear.y = 0.7;
+    rear.y = car.group.position.y + 0.7;
 
     if (car.boostTimer > 0) {
       for (let i = 0; i < 4; i++) {
@@ -336,29 +346,10 @@ export class Game {
         const side = i === 0 ? 1 : -1;
         const left = new THREE.Vector3(-back.z, 0, back.x);
         const wheel = rear.clone().addScaledVector(left, side * 1.1);
-        wheel.y = 0.35;
+        wheel.y = car.group.position.y + 0.35;
         const vel = back.clone().multiplyScalar(5).add(new THREE.Vector3(0, 1.8 + Math.random(), 0));
         const g = 0.5 + Math.random() * 0.2;
         this.particles.emit(wheel, vel, { r: g, g, b: g }, 0.6 + Math.random() * 0.3);
-      }
-    }
-  }
-
-  checkItems() {
-    const pos = this.car.group.position;
-    for (const it of this.items) {
-      if (it.collected) continue;
-      if (pos.distanceTo(it.mesh.position) < ITEM_RADIUS) {
-        it.collected = true;
-        it.mesh.visible = false;
-        this.score += it.points;
-        if (it.isBoost) {
-          this.car.boost(2.2);
-          this.ui.onBoost();
-          sounds.boost();
-        } else {
-          sounds.collect();
-        }
       }
     }
   }
@@ -468,7 +459,6 @@ export class Game {
       this.onRoad = Math.abs(lateral) < this.trackWidth / 2 + 1;
 
       this.emitDriveParticles();
-      this.checkItems();
       this.checkGates();
       this.checkLap();
 
@@ -484,7 +474,7 @@ export class Game {
       });
     }
 
-    animatePhotoObjects(this.holograms, this.items, time);
+    animatePhotoObjects(this.holograms, time);
     this.particles.update(rawDt);
     this.updateCamera();
     this.updateSun();

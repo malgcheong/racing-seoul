@@ -3,10 +3,10 @@
 import * as THREE from 'three';
 import { instantiate } from '../utils/assets.js';
 
-const ACCEL = 42;
-const BRAKE = 70;
-const MAX_SPEED = 58;          // m/s (표시상 약 200km/h)
-const MAX_REVERSE = -14;
+const ACCEL = 28;
+const BRAKE = 55;
+const MAX_SPEED = 36;          // m/s (표시상 약 130km/h) — 야간 드라이브 페이스
+const MAX_REVERSE = -10;
 const FRICTION = 12;
 const OFFROAD_FACTOR = 0.45;   // 오프로드 시 최고 속도 배율
 const STEER_RATE = 2.2;
