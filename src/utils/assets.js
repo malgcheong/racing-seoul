@@ -16,6 +16,19 @@ const FILES = {
 const cache = {};
 let loadPromise = null;
 
+// 익스포트 시 오브젝트 위치가 노드가 아닌 버텍스에 구워진 경우,
+// 회전 피벗이 원점이 되어버린다(바퀴가 차 주위를 공전하는 버그).
+// 지오메트리를 중심만큼 당기고 노드를 그만큼 밀어 피벗을 재중심화한다.
+// 캐시된 원본에 1회만 적용 — 클론들은 지오메트리를 공유하므로 중복 적용 금지.
+function recenterPivot(node) {
+  const box = new THREE.Box3().setFromObject(node);
+  const center = box.getCenter(new THREE.Vector3());
+  node.traverse((o) => {
+    if (o.isMesh) o.geometry.translate(-center.x, -center.y, -center.z);
+  });
+  node.position.copy(center);
+}
+
 export function loadGameAssets(onProgress) {
   if (!loadPromise) {
     const loader = new GLTFLoader();
@@ -24,6 +37,12 @@ export function loadGameAssets(onProgress) {
     loadPromise = Promise.all(
       names.map(async (name) => {
         const gltf = await loader.loadAsync(FILES[name]);
+        if (name === 'car') {
+          for (const n of ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']) {
+            const wheel = gltf.scene.getObjectByName(n);
+            if (wheel) recenterPivot(wheel);
+          }
+        }
         cache[name] = gltf.scene;
         done++;
         onProgress?.(done / names.length);
