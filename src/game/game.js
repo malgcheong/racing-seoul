@@ -29,12 +29,124 @@ function nightify(p) {
   const mix = (c, target, t) => new THREE.Color(c).lerp(new THREE.Color(target), t).getHex();
   return {
     ...p,
-    skyTop: mix(p.skyTop, 0x04060f, 0.88),
-    skyHorizon: mix(p.skyHorizon, 0x141b38, 0.75),
+    // 별이 보이려면 꼭대기는 거의 검정, 사진 색조는 지평선에만 살짝
+    skyTop: mix(p.skyTop, 0x02030a, 0.96),
+    skyHorizon: mix(p.skyHorizon, 0x0c1228, 0.85),
     fog: mix(p.fog, 0x0a0d1c, 0.85),
     ground: mix(p.ground, 0x05060c, 0.8),
     isNight: true,
   };
+}
+
+// 별 필드: 상반구에 랜덤 분포, 밝기·색온도(푸름/노람) 배리에이션
+function makeStars(count = 900) {
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const R = 1500;
+  const warm = new THREE.Color(0xfff2d0);
+  const cool = new THREE.Color(0xcfd8ff);
+  for (let i = 0; i < count; i++) {
+    const azimuth = Math.random() * Math.PI * 2;
+    const y = 0.04 + Math.pow(Math.random(), 0.7) * 0.96; // 위쪽에 살짝 더 밀집
+    const r = Math.sqrt(1 - y * y);
+    positions[i * 3] = Math.cos(azimuth) * r * R;
+    positions[i * 3 + 1] = y * R;
+    positions[i * 3 + 2] = Math.sin(azimuth) * r * R;
+    const tint = warm.clone().lerp(cool, Math.random());
+    const brightness = 0.25 + Math.pow(Math.random(), 2.2) * 0.75; // 대부분 흐리고 일부만 밝게
+    colors[i * 3] = tint.r * brightness;
+    colors[i * 3 + 1] = tint.g * brightness;
+    colors[i * 3 + 2] = tint.b * brightness;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // 부드러운 원형 점 텍스처
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.4, 'rgba(255,255,255,0.5)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 32, 32);
+
+  const mat = new THREE.PointsMaterial({
+    size: 2.4,
+    sizeAttenuation: false, // 픽셀 고정 크기 (거리 무관)
+    map: new THREE.CanvasTexture(canvas),
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    fog: false, // 안개 거리(800) 밖이므로 필수
+  });
+  const stars = new THREE.Points(geo, mat);
+  stars.frustumCulled = false;
+  return stars;
+}
+
+// 달: 크레이터 텍스처 원판 + 은은한 달무리. 방향광과 같은 방향에 배치해
+// 그림자가 달에서 오는 것처럼 보이게 한다.
+function makeMoon(dir) {
+  const group = new THREE.Group();
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f4efdf';
+  ctx.beginPath();
+  ctx.arc(64, 64, 62, 0, Math.PI * 2);
+  ctx.fill();
+  // 크레이터 얼룩
+  for (const [x, y, r, a] of [
+    [45, 42, 14, 0.16], [82, 58, 10, 0.13], [58, 85, 16, 0.14],
+    [90, 88, 8, 0.11], [36, 70, 8, 0.1], [70, 30, 7, 0.12],
+  ]) {
+    ctx.fillStyle = `rgba(150,145,135,${a})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const moonTex = new THREE.CanvasTexture(canvas);
+
+  const disc = new THREE.Mesh(
+    new THREE.PlaneGeometry(150, 150),
+    new THREE.MeshBasicMaterial({ map: moonTex, transparent: true, fog: false })
+  );
+  group.add(disc);
+
+  // 달무리 (halo): 은은한 냉백색, 달을 중심으로
+  const haloCanvas = document.createElement('canvas');
+  haloCanvas.width = 128;
+  haloCanvas.height = 128;
+  const hctx = haloCanvas.getContext('2d');
+  const hg = hctx.createRadialGradient(64, 64, 24, 64, 64, 64);
+  hg.addColorStop(0, 'rgba(220,228,245,0.28)');
+  hg.addColorStop(0.45, 'rgba(190,205,240,0.08)');
+  hg.addColorStop(1, 'rgba(180,200,240,0)');
+  hctx.fillStyle = hg;
+  hctx.fillRect(0, 0, 128, 128);
+  const halo = new THREE.Mesh(
+    new THREE.PlaneGeometry(340, 340),
+    new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(haloCanvas),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: false,
+    })
+  );
+  halo.position.z = -1;
+  group.add(halo);
+
+  group.position.copy(dir).multiplyScalar(1420);
+  group.lookAt(0, 0, 0);
+  return group;
 }
 
 // 화면 가장자리를 살짝 어둡게 (비네트)
@@ -155,7 +267,14 @@ export class Game {
     sun.shadow.bias = -0.0006;
     this.sun = sun;
     this.scene.add(hemi, sun, sun.target);
-    this.scene.add(makeSky(this.palette));
+
+    // 밤하늘: 돔 + 별 필드 + 달을 한 그룹으로 묶어 카메라를 따라가게 한다
+    // (무한히 먼 것처럼 보이게 해 시차로 흔들리지 않도록. 달은 달빛 방향과 일치)
+    this.skyDome = new THREE.Group();
+    this.skyDome.add(makeSky(this.palette));
+    this.skyDome.add(makeStars());
+    this.skyDome.add(makeMoon(this.sunDir));
+    this.scene.add(this.skyDome);
 
     // 하늘을 환경맵으로 구워 젖은 노면·차체에 은은한 시트(sheen) 반사
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -333,6 +452,11 @@ export class Game {
     }
 
     const lookAt = car.position.clone().add(new THREE.Vector3(0, 1.8, 0));
+    // 개발용: 하늘 확인 (?lookup=1)
+    if (this._lookUp === undefined) {
+      this._lookUp = new URLSearchParams(location.search).get('lookup') === '1';
+    }
+    if (this._lookUp) lookAt.y += 900;
     this.camera.lookAt(lookAt);
   }
 
@@ -354,6 +478,8 @@ export class Game {
     this.sun.position.copy(pos).addScaledVector(this.sunDir, 280);
     this.sun.target.position.copy(pos);
     this.sun.target.updateMatrixWorld();
+    // 하늘 돔(별·달)은 카메라를 따라가 무한히 먼 것처럼 보이게 (시차 제거)
+    if (this.skyDome) this.skyDome.position.copy(this.camera.position);
   }
 
   // 부스터 불꽃 / 드리프트 스모크
