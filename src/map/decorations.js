@@ -193,20 +193,15 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     return total / n;
   })();
 
-  // 1) 수면: 고가도로 아래로 펼쳐진 강/바다. 매끈(낮은 러프니스)해서
-  //    하늘 환경맵과 달빛을 반사 → 야간 물빛
-  const water = new THREE.Mesh(
-    new THREE.CircleGeometry(1600, 64),
-    new THREE.MeshStandardMaterial({
-      color: palette.water ?? 0x05070f,
-      roughness: 0.18,
-      metalness: 0.5,
-      envMapIntensity: 1.4,
-    })
+  // 1) 지상: 야간 도시 바닥
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(1600, 48),
+    new THREE.MeshLambertMaterial({ color: lerpColor(palette.ground, 0x04050a, 0.8) })
   );
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = -1.2;
-  scene.add(water);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.05;
+  ground.receiveShadow = true;
+  scene.add(ground);
 
   // 2) 데크 갓길 포장
   const apron = new THREE.Mesh(
@@ -307,145 +302,122 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     { color: new THREE.Color(0x9fc0ff), p: 0.25 }, // 차가운 불빛
     { color: new THREE.Color(0x0d1018), p: 0.3 },  // 소등
   ];
-  // 강변 드라이브: 근접 빌딩은 성기게 배치해 물·강 건너 스카이라인이 드러나게 한다
-  //  - 한 지점에 한쪽에만(교차) 세우고, 슬롯 사이 간격을 넓힘
   const buildingLists = { buildingA: [], buildingB: [] };
   const coarse = samples.filter((_, i) => i % 8 === 0).map((s) => s.pos);
-  let i = Math.floor(rng() * 20);
-  let sideFlip = 1;
-  while (i < n) {
-    const side = (sideFlip = -sideFlip);
-    const s = samples[i];
-    const sc = range(rng, 0.85, 1.4);
-    const scy = range(rng, 0.7, 2.1);
-    const depthHalf = 4.4 * sc;
-    const off = parapetOffset + 2.5 + depthHalf;
-    const x = s.pos.x + s.left.x * off * side;
-    const z = s.pos.z + s.left.z * off * side;
+  for (const side of [-1, 1]) {
+    let i = Math.floor(rng() * 6);
+    while (i < n) {
+      const s = samples[i];
+      const sc = range(rng, 0.85, 1.4);
+      const scy = range(rng, 0.7, 2.1);
+      const depthHalf = 4.4 * sc;
+      const off = parapetOffset + 4.5 + depthHalf;
+      const x = s.pos.x + s.left.x * off * side;
+      const z = s.pos.z + s.left.z * off * side;
+      const alongWidth = 8.6 * sc;
 
-    if (minDistToTrack(x, z, coarse) >= Math.min(off - 1, 12)) {
-      const accent = pick(rng, palette.accents);
-      const roll = rng();
-      let acc = 0;
-      let winColor = WINDOW_VARIANTS[WINDOW_VARIANTS.length - 1].color;
-      for (const v of WINDOW_VARIANTS) {
-        acc += v.p;
-        if (roll < acc) { winColor = v.color; break; }
+      if (minDistToTrack(x, z, coarse) >= Math.min(off - 1, 12)) {
+        const accent = pick(rng, palette.accents);
+        const roll = rng();
+        let acc = 0;
+        let winColor = WINDOW_VARIANTS[WINDOW_VARIANTS.length - 1].color;
+        for (const v of WINDOW_VARIANTS) {
+          acc += v.p;
+          if (roll < acc) { winColor = v.color; break; }
+        }
+        const type = rng() > 0.5 ? 'buildingA' : 'buildingB';
+        buildingLists[type].push({
+          matrix: composeMatrix(
+            new THREE.Vector3(x, 0, z),
+            Math.atan2(-s.left.x * side, -s.left.z * side),
+            new THREE.Vector3(sc, scy, sc)
+          ),
+          facade: lerpColor(pick(rng, [accent]), 0x2a2e40, 0.75),
+          window: winColor,
+        });
       }
-      const type = rng() > 0.5 ? 'buildingA' : 'buildingB';
-      buildingLists[type].push({
-        matrix: composeMatrix(
-          new THREE.Vector3(x, -1.2, z),
-          Math.atan2(-s.left.x * side, -s.left.z * side),
-          new THREE.Vector3(sc, scy, sc)
-        ),
-        facade: lerpColor(pick(rng, [accent]), 0x2a2e40, 0.75),
-        window: winColor,
-      });
+      i += Math.max(3, Math.round((alongWidth + 1.2) / segLen));
     }
-    // 넓은 간격(대략 45~75유닛)으로 띄엄띄엄
-    i += Math.round(range(rng, 45, 75) / segLen);
   }
   buildInstancedBuildings(scene, 'buildingA', buildingLists.buildingA);
   buildInstancedBuildings(scene, 'buildingB', buildingLists.buildingB);
 
-  // 8) 강 건너 도심 스카이라인 + 수면 반사 (산맥 대체)
-  buildFarSkyline(scene, rng, palette);
+  // 8) 원경 산맥: 부드러운 능선의 실루엣을 여러 겹 둘러 대기 원근으로 표현
+  buildMountainRanges(scene, rng, palette);
 
   return { lampHeads };
 }
 
-// 창문 그리드 텍스처: 어두운 외벽 + 랜덤하게 불 켜진 창문 (자체발광처럼 언릿)
-function skylineWindowTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#0a0d1a';
-  ctx.fillRect(0, 0, 64, 128);
-  const warm = '#ffcf8a';
-  const cool = '#a9c8ff';
-  const cols = 5;
-  const rows = 14;
-  const pw = 64 / cols;
-  const ph = 128 / rows;
-  for (let cx = 0; cx < cols; cx++) {
-    for (let cy = 0; cy < rows; cy++) {
-      const r = Math.random();
-      if (r < 0.42) {
-        ctx.fillStyle = Math.random() < 0.7 ? warm : cool;
-        ctx.globalAlpha = 0.55 + Math.random() * 0.45;
-      } else {
-        ctx.fillStyle = '#141826';
-        ctx.globalAlpha = 1;
-      }
-      ctx.fillRect(cx * pw + pw * 0.22, cy * ph + ph * 0.2, pw * 0.56, ph * 0.55);
+// 부드러운 능선 실루엣 링 지오메트리 하나 생성 (원통을 둘러싼 fBm 높이 곡선)
+// baseY 아래는 지평선 밑으로 내려 안개/지형에 자연스럽게 묻히게 한다.
+function ridgeRing(radius, baseHeight, amp, seed, roughness) {
+  const segments = 200;
+  const positions = [];
+  const indices = [];
+
+  // 시드 기반 다중 사인 합(fBm 유사)으로 능선 높이 프로파일
+  const octaves = [];
+  let s = seed;
+  for (let o = 0; o < 5; o++) {
+    s = (s * 9301 + 49297) % 233280;
+    octaves.push({
+      freq: (o + 1) * (1.2 + roughness),
+      phase: (s / 233280) * Math.PI * 2,
+      weight: 1 / (o + 1),
+    });
+  }
+  const heightAt = (t) => {
+    let h = 0;
+    let wsum = 0;
+    for (const oc of octaves) {
+      h += Math.sin(t * Math.PI * 2 * oc.freq + oc.phase) * oc.weight;
+      wsum += oc.weight;
+    }
+    return (h / wsum) * 0.5 + 0.5; // 0~1
+  };
+
+  const bottom = -80; // 지평선 아래까지 내려 묻히게
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const angle = t * Math.PI * 2;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const top = baseHeight + heightAt(t) * amp;
+    positions.push(x, bottom, z, x, top, z);
+    if (i < segments) {
+      const a = i * 2;
+      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
     }
   }
-  ctx.globalAlpha = 1;
-  const tex = new THREE.CanvasTexture(canvas);
-  return tex;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
 }
 
-// 수면 반사 스트리크 텍스처: 위(타워 밑동)는 밝고 아래(가까운 쪽)로 사라지는 세로 그라디언트
-function reflectionTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 16;
-  canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createLinearGradient(0, 0, 0, 64);
-  g.addColorStop(0, 'rgba(255,220,170,0.5)');
-  g.addColorStop(0.5, 'rgba(255,210,150,0.14)');
-  g.addColorStop(1, 'rgba(255,205,140,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 16, 64);
-  return new THREE.CanvasTexture(canvas);
-}
-
-function buildFarSkyline(scene, rng, palette) {
-  const WATER_Y = -1.2;
-  const towerGeo = new THREE.BoxGeometry(1, 1, 1);
-  const towerMat = new THREE.MeshBasicMaterial({ map: skylineWindowTexture(), fog: false });
-  const count = 90;
-  const towerMatrices = [];
-  const towerColors = [];
-  const reflMatrices = [];
-
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2 + range(rng, -0.03, 0.03);
-    const dist = range(rng, 620, 920);
-    const w = range(rng, 14, 34);
-    const h = range(rng, 45, 190);
-    const cx = Math.cos(angle) * dist;
-    const cz = Math.sin(angle) * dist;
-
-    towerMatrices.push(composeMatrix(
-      new THREE.Vector3(cx, WATER_Y + h / 2, cz),
-      angle + Math.PI / 2, // 창문 면이 중심(관찰자)을 향하도록
-      new THREE.Vector3(w, h, w)
-    ));
-    // 원경 대기 원근: 먼 타워는 하늘색에 가깝게 흐리게
-    const haze = THREE.MathUtils.clamp((dist - 620) / 300, 0, 1);
-    towerColors.push(lerpColor(0xffffff, palette.skyHorizon, haze * 0.6));
-
-    // 수면 반사: 타워 밑동에서 중심(안쪽)으로 뻗는 납작한 세로 스트리크
-    const reflLen = h * range(rng, 0.5, 0.9);
-    const inward = new THREE.Vector3(-Math.cos(angle), 0, -Math.sin(angle));
-    const reflPos = new THREE.Vector3(cx, WATER_Y + 0.05, cz).addScaledVector(inward, reflLen / 2);
-    const reflM = new THREE.Matrix4().compose(
-      reflPos,
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, -angle + Math.PI / 2)),
-      new THREE.Vector3(w * 0.7, reflLen, 1)
-    );
-    reflMatrices.push(reflM);
+function buildMountainRanges(scene, rng, palette) {
+  // 뒤로 갈수록 옅어지는(대기 원근) 4겹 실루엣.
+  // 하늘 지평선 색과 섞어 가장 먼 산은 거의 하늘에 녹아들게 한다.
+  const layers = [
+    { radius: 1150, base: 40, amp: 210, haze: 0.82 },
+    { radius: 1050, base: 30, amp: 170, haze: 0.62 },
+    { radius: 960,  base: 22, amp: 140, haze: 0.42 },
+    { radius: 880,  base: 15, amp: 110, haze: 0.24 },
+  ];
+  const ridgeBase = new THREE.Color(0x0a0e1e); // 가까운 능선의 짙은 남색
+  for (let li = 0; li < layers.length; li++) {
+    const L = layers[li];
+    const color = ridgeBase.clone().lerp(new THREE.Color(palette.skyHorizon), L.haze);
+    const geo = ridgeRing(L.radius, L.base, L.amp, Math.floor(rng() * 100000) + li * 777, 0.4 + li * 0.15);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      side: THREE.DoubleSide,
+      fog: false, // 자체 대기 원근으로 처리(안개 far 밖)
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = -10 + li; // 먼 산부터 그려 겹침 순서 보장
+    scene.add(mesh);
   }
-
-  addInstanced(scene, towerGeo, towerMat, towerMatrices, { colors: towerColors });
-
-  addInstanced(scene, new THREE.PlaneGeometry(1, 1),
-    new THREE.MeshBasicMaterial({
-      map: reflectionTexture(), transparent: true,
-      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
-    }),
-    reflMatrices);
 }
