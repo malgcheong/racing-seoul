@@ -9,34 +9,13 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { generateTrack, buildRoadMesh, buildStartLine } from '../map/trackGenerator.js';
 import { ParticleSystem } from './particles.js';
 import { buildEnvironment } from '../map/decorations.js';
-import {
-  placePhotoGates,
-  placeHolograms,
-  animatePhotoObjects,
-} from '../map/photoObjects.js';
 import { Car } from './car.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 
 const TOTAL_LAPS = 3;
-const GATE_SLOWMO = 0.5;        // 게이트 통과 시 시간 배율 (사진을 올려다볼 여유)
-const GATE_SLOWMO_DURATION = 1.1; // 슬로모션 지속(실제 초)
 const BASE_FOV = 68;
 const MAX_SPEED_ABS = 36;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
-
-// 사진 팔레트를 야간 무드로 변환 (색조는 남기고 어둡게)
-function nightify(p) {
-  const mix = (c, target, t) => new THREE.Color(c).lerp(new THREE.Color(target), t).getHex();
-  return {
-    ...p,
-    // 별이 보이려면 꼭대기는 거의 검정, 사진 색조는 지평선에만 살짝
-    skyTop: mix(p.skyTop, 0x02030a, 0.96),
-    skyHorizon: mix(p.skyHorizon, 0x0c1228, 0.85),
-    fog: mix(p.fog, 0x0a0d1c, 0.85),
-    ground: mix(p.ground, 0x05060c, 0.8),
-    isNight: true,
-  };
-}
 
 // 별 필드: 상반구에 랜덤 분포, 밝기·색온도(푸름/노람) 배리에이션
 function makeStars(count = 900) {
@@ -204,10 +183,9 @@ function makeSky(palette, radius = 1600) {
 }
 
 export class Game {
-  // photos: [{thumbUrl, textureUrl, memo, analysis}], palette: buildPalette 결과
-  constructor(container, photos, palette, ui) {
+  // palette: nightCityPalette 결과
+  constructor(container, palette, ui) {
     this.container = container;
-    this.photos = photos;
     this.palette = palette;
     this.ui = ui; // { onHud, onLap, onFinish, onCountdown, onBoost }
 
@@ -221,13 +199,10 @@ export class Game {
     this.lapStart = 0;
     this.bestLap = Infinity;
     this.raceTime = 0;
-    this.timeScale = 1;
-    this.slowmoRemaining = 0;
   }
 
   build(seed) {
     const rng = createRng(seed);
-    this.palette = nightify(this.palette);
 
     // 렌더러/씬
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -312,8 +287,6 @@ export class Game {
       this.scene.add(light);
       this.lampLights.push(light);
     }
-    this.gates = placePhotoGates(this.scene, this.photos, track.samples, rng, track.width);
-    this.holograms = placeHolograms(this.scene, this.photos, track.samples, rng);
 
     // 차량: 출발선에서 트랙 진행 방향으로
     const s0 = this.samples[0];
@@ -331,7 +304,6 @@ export class Game {
 
     this.currentSampleIdx = 0;
     this.prevProgress = 0;
-    this.prevGateSampleIdx = 0;
 
     // 개발용 렌더 통계 (?stats=1): 드로우콜/삼각형 수를 좌상단 힌트에 표시
     // 컴포저가 패스마다 info를 리셋하므로 수동 리셋으로 프레임 전체를 집계
@@ -389,14 +361,9 @@ export class Game {
     await this.countdown();
     if (this.disposed) return;
     // 개발·검증용 자동 주행 (?autodrive=1)
-    const params = new URLSearchParams(location.search);
-    if (params.get('autodrive') === '1') {
+    if (new URLSearchParams(location.search).get('autodrive') === '1') {
       this.input.forward = true;
       this.autoSteer = true;
-    }
-    // 개발·검증용: 시작 직후 플래시백 강제 발동 (?flashtest=1)
-    if (params.get('flashtest') === '1' && this.gates.length) {
-      setTimeout(() => this.onGateCrossed(this.gates[0]), 1200);
     }
     this.running = true;
     this.clock.start();
@@ -513,35 +480,6 @@ export class Game {
     }
   }
 
-  // 게이트 통과 판정: 이번 프레임에 전진한 샘플 구간 안에 게이트가 있는지 검사
-  checkGates() {
-    const n = this.samples.length;
-    const cur = this.currentSampleIdx;
-    const advanced = (cur - this.prevGateSampleIdx + n) % n;
-    // 순간이동 수준(랩 경계 오차 등)은 무시
-    if (advanced > 0 && advanced < 80) {
-      for (const g of this.gates) {
-        const rel = (g.sampleIdx - this.prevGateSampleIdx + n) % n;
-        if (rel > 0 && rel <= advanced) this.onGateCrossed(g);
-      }
-    }
-    this.prevGateSampleIdx = cur;
-  }
-
-  onGateCrossed(gate) {
-    if (!gate.flashed) {
-      // 첫 만남: 짧은 슬로모션 + 감성 차임 (연출은 게이트 자체가 담당)
-      gate.flashed = true;
-      this.score += 25;
-      this.slowmoRemaining = GATE_SLOWMO_DURATION;
-      sounds.memory();
-    } else {
-      // 이후 랩: 가벼운 차임 + 소량 점수만
-      this.score += 5;
-      sounds.collect();
-    }
-  }
-
   checkLap() {
     const n = this.samples.length;
     const progress = this.currentSampleIdx / n;
@@ -569,22 +507,13 @@ export class Game {
       totalTime: this.raceTime,
       bestLap: this.bestLap,
       score: this.score,
-      memoriesSeen: this.gates.filter((g) => g.flashed).length,
-      totalMemories: this.gates.length,
     });
   }
 
   loop() {
     if (this.disposed) return;
     requestAnimationFrame(() => this.loop());
-    const rawDt = Math.min(this.clock.getDelta(), 0.05);
-    const time = this.clock.elapsedTime;
-
-    // 게이트 슬로모션: 시간 배율을 부드럽게 전환
-    if (this.slowmoRemaining > 0) this.slowmoRemaining -= rawDt;
-    const targetScale = this.slowmoRemaining > 0 ? GATE_SLOWMO : 1;
-    this.timeScale = THREE.MathUtils.lerp(this.timeScale, targetScale, Math.min(1, rawDt * 8));
-    const dt = rawDt * this.timeScale;
+    const dt = Math.min(this.clock.getDelta(), 0.05);
 
     if (this.running) {
       this.raceTime += dt;
@@ -618,7 +547,6 @@ export class Game {
       this.onRoad = Math.abs(lateral) < this.trackWidth / 2 + 1;
 
       this.emitDriveParticles();
-      this.checkGates();
       this.checkLap();
 
       this.ui.onHud({
@@ -628,13 +556,10 @@ export class Game {
         time: this.raceTime,
         score: this.score,
         boosting: this.car.boostTimer > 0,
-        memoriesSeen: this.gates.filter((g) => g.flashed).length,
-        totalMemories: this.gates.length,
       });
     }
 
-    animatePhotoObjects(this.holograms, time);
-    this.particles.update(rawDt);
+    this.particles.update(dt);
     this.updateCamera();
     this.updateSun();
     this.updateLampLights();
