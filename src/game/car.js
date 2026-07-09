@@ -13,9 +13,10 @@ const STEER_RATE = 1.4;   // 좌우 조향 민감도 (낮출수록 완만)
 
 export class Car {
   constructor(color = 0xff5533) {
-    // Blender 에셋(car.glb): Body + Wheel_FL/FR/RL/RR, CarPaint 머티리얼을 팔레트 색으로 틴트
+    // Blender 에셋(car.glb): Body + Wheel_FL/FR/RL/RR.
+    // 카페인트는 고정 메탈릭 오렌지(GLB 재질 그대로) — 팔레트 틴트 안 함.
     this.group = new THREE.Group();
-    const model = instantiate('car', { CarPaint: color });
+    const model = instantiate('car');
     model.rotation.y = Math.PI; // 에셋 앞이 +Y(=-Z) → 게임 전방(+Z)에 맞춰 180° 회전
     this.group.add(model);
     this.wheels = ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']
