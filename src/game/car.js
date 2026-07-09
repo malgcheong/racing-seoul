@@ -16,6 +16,7 @@ export class Car {
     // Blender 에셋(car.glb): Body + Wheel_FL/FR/RL/RR, CarPaint 머티리얼을 팔레트 색으로 틴트
     this.group = new THREE.Group();
     const model = instantiate('car', { CarPaint: color });
+    model.rotation.y = Math.PI; // 에셋 앞이 +Y(=-Z) → 게임 전방(+Z)에 맞춰 180° 회전
     this.group.add(model);
     this.wheels = ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']
       .map((n) => model.getObjectByName(n))

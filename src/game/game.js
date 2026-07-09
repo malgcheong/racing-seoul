@@ -6,7 +6,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { generateTrack, buildRoadMesh, buildStartLine } from '../map/trackGenerator.js';
+import { generateTrack, buildRoadMesh, buildStartLine, buildMedian, MEDIAN_HALF } from '../map/trackGenerator.js';
 import { ParticleSystem } from './particles.js';
 import { buildEnvironment } from '../map/decorations.js';
 import { Car } from './car.js';
@@ -277,7 +277,12 @@ export class Game {
     this.samples = track.samples;
     this.trackWidth = track.width;
     this.scene.add(buildRoadMesh(track.samples, track.width));
+    this.scene.add(buildMedian(track.samples));
     this.scene.add(buildStartLine(track.samples, track.width));
+    // 우측 통행: 주행 가능한 측면 범위(중앙분리대 ~ 우측 배리어), lateral<0이 우측
+    this.laneMin = MEDIAN_HALF + 1.4;               // 중앙분리대에서 최소 이격
+    this.laneMax = track.width / 2 - 1.2;           // 우측 갓길 직전
+    this.laneCenter = (this.laneMin + this.laneMax) / 2;
     const env = buildEnvironment(this.scene, rng, track.samples, this.palette, track.width);
     this.lampHeads = env.lampHeads;
     // 실제 광원은 3개만 풀링: 매 프레임 차에서 가장 가까운 가로등 3개로 이동
@@ -288,12 +293,13 @@ export class Game {
       this.lampLights.push(light);
     }
 
-    // 차량: 출발선에서 트랙 진행 방향으로
+    // 차량: 출발선 우측 차로에서 트랙 진행 방향으로 (lateral<0 = 우측)
     const s0 = this.samples[0];
     this.car = new Car(this.palette.accents[0]);
     this.car.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     const heading = Math.atan2(s0.tangent.x, s0.tangent.z);
-    this.car.placeAt(s0.pos.clone(), heading); // 데크 높이 그대로
+    const startPos = s0.pos.clone().addScaledVector(s0.left, -this.laneCenter); // 우측 차로
+    this.car.placeAt(startPos, heading);
     this.scene.add(this.car.group);
 
     // 야간 헤드라이트 (차와 함께 이동하는 스포트라이트)
@@ -513,8 +519,10 @@ export class Game {
     if (this.running) {
       this.raceTime += dt;
       if (this.autoSteer) {
+        // 우측 차로 중앙을 겨냥 (중앙선에서 -left 방향으로 laneCenter만큼 오프셋)
         const n = this.samples.length;
-        const ahead = this.samples[(this.currentSampleIdx + 18) % n].pos;
+        const as = this.samples[(this.currentSampleIdx + 18) % n];
+        const ahead = as.pos.clone().addScaledVector(as.left, -this.laneCenter);
         const desired = Math.atan2(
           ahead.x - this.car.group.position.x,
           ahead.z - this.car.group.position.z
@@ -527,19 +535,19 @@ export class Game {
       }
       this.car.update(dt, this.input, this.onRoad !== false);
 
-      // 이동 후 측면 위치 계산 → 배리어 밖으로 못 나가게 하드 클램프 (벽을 따라 미끄러짐)
+      // 이동 후 측면 위치 → 우측 차로 밴드[-laneMax, -laneMin]로 하드 클램프
+      // (중앙분리대와 우측 배리어 사이. 넘으면 벽을 따라 미끄러지며 감속)
       this.findNearestSample();
       const near = this.samples[this.currentSampleIdx];
       const carPos = this.car.group.position;
       const lateral =
         (carPos.x - near.pos.x) * near.left.x + (carPos.z - near.pos.z) * near.left.z;
-      const limit = this.trackWidth / 2 + 0.6;
-      if (Math.abs(lateral) > limit) {
-        const clamped = THREE.MathUtils.clamp(lateral, -limit, limit);
+      const clamped = THREE.MathUtils.clamp(lateral, -this.laneMax, -this.laneMin);
+      if (clamped !== lateral) {
         carPos.addScaledVector(near.left, clamped - lateral);
-        this.car.speed *= 0.985; // 벽 마찰
+        this.car.speed *= 0.985; // 벽/분리대 마찰
       }
-      this.onRoad = Math.abs(lateral) < this.trackWidth / 2 + 1;
+      this.onRoad = true;
 
       this.emitDriveParticles();
       this.checkLap();
