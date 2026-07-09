@@ -26,7 +26,6 @@ export function nightCityPalette(rng) {
     skyHorizon: hsl(baseHue, range(rng, 0.35, 0.5), range(rng, 0.09, 0.14)),
     fog: hsl(baseHue, 0.4, 0.07),
     ground: 0x05060c,
-    water: hsl(baseHue, 0.45, 0.05),
     accents,
     isNight: true,
   };
