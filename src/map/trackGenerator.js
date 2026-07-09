@@ -38,32 +38,80 @@ export function generateTrack(rng) {
 // 아스팔트 + 중앙 점선 + 양측 흰 라인 텍스처
 function createRoadTexture() {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
+  const S = 512;
+  canvas.width = S;
+  canvas.height = S;
   const ctx = canvas.getContext('2d');
 
-  ctx.fillStyle = '#33353d';
-  ctx.fillRect(0, 0, 256, 256);
-  // 노이즈 알갱이
-  for (let i = 0; i < 900; i++) {
-    const v = 40 + Math.random() * 40;
-    ctx.fillStyle = `rgba(${v},${v},${v + 6},0.35)`;
-    ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+  // 베이스 아스팔트
+  ctx.fillStyle = '#2b2d34';
+  ctx.fillRect(0, 0, S, S);
+
+  // 고운 알갱이(2톤): 밝은 자갈 + 어두운 알갱이
+  for (let i = 0; i < 6000; i++) {
+    const v = 55 + Math.random() * 45;
+    ctx.fillStyle = `rgba(${v},${v},${v + 5},${0.12 + Math.random() * 0.18})`;
+    ctx.fillRect(Math.random() * S, Math.random() * S, 1, 1);
   }
-  // 양측 흰 라인
-  ctx.fillStyle = '#e8e8e8';
-  ctx.fillRect(6, 0, 8, 256);
-  ctx.fillRect(242, 0, 8, 256);
-  // 중앙 점선(노랑)
-  ctx.fillStyle = '#ffcf4d';
-  for (let y = 0; y < 256; y += 64) {
-    ctx.fillRect(124, y, 8, 36);
+  for (let i = 0; i < 4000; i++) {
+    const v = 18 + Math.random() * 18;
+    ctx.fillStyle = `rgba(${v},${v},${v},${0.15 + Math.random() * 0.2})`;
+    ctx.fillRect(Math.random() * S, Math.random() * S, 1, 1);
   }
+  // 큰 얼룩(보수 자국·오일)
+  for (let i = 0; i < 14; i++) {
+    const x = Math.random() * S, y = Math.random() * S;
+    const r = 30 + Math.random() * 90;
+    const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+    const dark = Math.random() < 0.5;
+    g.addColorStop(0, dark ? 'rgba(20,20,24,0.35)' : 'rgba(70,72,80,0.22)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * (0.6 + Math.random() * 0.5), Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // 미세 크랙
+  ctx.strokeStyle = 'rgba(12,12,14,0.5)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 22; i++) {
+    let x = Math.random() * S, y = Math.random() * S;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    const segs = 3 + Math.floor(Math.random() * 4);
+    for (let j = 0; j < segs; j++) {
+      x += (Math.random() - 0.5) * 60;
+      y += (Math.random() - 0.5) * 60;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // 차선 마모 효과: 라인 위에 불규칙 지움
+  const wear = (lx, lw) => {
+    const scratches = 40;
+    for (let i = 0; i < scratches; i++) {
+      ctx.fillStyle = `rgba(43,45,52,${0.25 + Math.random() * 0.4})`;
+      ctx.fillRect(lx + Math.random() * lw, Math.random() * S, 1 + Math.random() * 2, 3 + Math.random() * 8);
+    }
+  };
+  // 양측 흰 라인 (약간 누런 마모)
+  ctx.fillStyle = '#dcdcd2';
+  ctx.fillRect(12, 0, 12, S);
+  ctx.fillRect(S - 24, 0, 12, S);
+  wear(12, 12); wear(S - 24, 12);
+  // 중앙 점선(노랑, 마모)
+  ctx.fillStyle = '#e8bc44';
+  const cx = S / 2 - 7;
+  for (let y = 0; y < S; y += 128) {
+    ctx.fillRect(cx, y, 14, 74);
+  }
+  wear(cx, 14);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 4;
+  tex.anisotropy = 8;
   return tex;
 }
 

@@ -198,7 +198,7 @@ function makeFacadeMaterial() {
             vec3 cool = vec3(0.60, 0.76, 1.0);
             vec3 wcol = mix(warm, cool, step(0.72, fract(r*7.0)));
             float flick = 0.55 + 0.45*fract(r*131.0);
-            totalEmissiveRadiance += win * lit * wcol * flick * 1.5;
+            totalEmissiveRadiance += win * lit * wcol * flick * 0.7;
             diffuseColor.rgb *= (1.0 - win*0.55);  // 창 부분 외벽은 어둡게(유리 느낌)
           }
         }`);
@@ -394,10 +394,17 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
 
 // 뾰족한 화강암 봉우리(북한산 느낌) 능선 링 지오메트리.
 // 사인 물결 대신 "뚜렷한 봉우리들"을 세워 각지고 험준한 실루엣을 만든다.
-function ridgeRing(radius, baseHeight, amp, seed) {
+// 정점 색으로 질감 표현: 아래=짙은 숲, 위=달빛 화강암 바위.
+function ridgeRing(radius, baseHeight, amp, seed, tint) {
   const segments = 400; // 각진 봉우리를 살리려면 촘촘하게
   const positions = [];
+  const colors = [];
   const indices = [];
+
+  const cLow = new THREE.Color(tint.low);    // 산기슭 짙은 숲
+  const cHigh = new THREE.Color(tint.high);  // 능선 위 밝은 숲/바위
+  const cRock = new THREE.Color(tint.rock);  // 달빛 화강암 봉우리
+  const cBottom = cLow.clone().multiplyScalar(0.35); // 바닥은 더 어둡게
 
   // 시드 기반 LCG
   let s = (seed % 233280 + 233280) % 233280;
@@ -446,13 +453,25 @@ function ridgeRing(radius, baseHeight, amp, seed) {
   };
 
   const bottom = -120; // 지평선 밑으로 깊게 내려 묻히게
+  const tmp = new THREE.Color();
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
     const angle = t * Math.PI * 2;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
-    const top = baseHeight + heightAt(t) * amp;
+    const hRatio = heightAt(t); // 0~1 능선 높이
+    const top = baseHeight + hRatio * amp;
     positions.push(x, bottom, z, x, top, z);
+
+    // 정점 색: 바닥=어두운 숲, 정상부=밝은 숲→바위(높은 봉우리일수록 화강암)
+    const jitter = 0.9 + rand() * 0.2; // 능선따라 미세 밝기 변화(질감)
+    tmp.copy(cLow).lerp(cHigh, THREE.MathUtils.smoothstep(hRatio, 0.15, 0.7));
+    if (hRatio > 0.62) {
+      tmp.lerp(cRock, THREE.MathUtils.smoothstep(hRatio, 0.62, 0.95) * 0.7);
+    }
+    tmp.multiplyScalar(jitter);
+    colors.push(cBottom.r, cBottom.g, cBottom.b, tmp.r, tmp.g, tmp.b);
+
     if (i < segments) {
       const a = i * 2;
       indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
@@ -461,6 +480,7 @@ function ridgeRing(radius, baseHeight, amp, seed) {
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   return geo;
@@ -475,13 +495,20 @@ function buildMountainRanges(scene, rng, palette) {
     { radius: 950,  base: 35, amp: 270, haze: 0.34 },
     { radius: 870,  base: 26, amp: 240, haze: 0.16 },
   ];
-  const forest = new THREE.Color(0x1f3a26); // 달빛 숲 초록
+  const sky = new THREE.Color(palette.skyHorizon);
   for (let li = 0; li < layers.length; li++) {
     const L = layers[li];
-    const color = forest.clone().lerp(new THREE.Color(palette.skyHorizon), L.haze);
-    const geo = ridgeRing(L.radius, L.base, L.amp, Math.floor(rng() * 100000) + li * 777);
+    // 대기 원근: 뒤 능선일수록 하늘색에 녹아들게 각 색을 sky와 섞음
+    const haze = L.haze;
+    const mixSky = (hex) => new THREE.Color(hex).lerp(sky, haze).getHex();
+    const tint = {
+      low: mixSky(0x16301f),   // 산기슭 짙은 숲
+      high: mixSky(0x2f5236),  // 능선 밝은 숲
+      rock: mixSky(0x6d7a72),  // 달빛 화강암(냉회록)
+    };
+    const geo = ridgeRing(L.radius, L.base, L.amp, Math.floor(rng() * 100000) + li * 777, tint);
     const mat = new THREE.MeshBasicMaterial({
-      color,
+      vertexColors: true,
       side: THREE.DoubleSide,
       fog: false, // 자체 대기 원근으로 처리(안개 far 밖)
     });
