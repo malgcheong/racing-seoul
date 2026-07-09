@@ -425,21 +425,21 @@ function mountainRockTexture() {
 
 function buildMountainRanges(scene, rng) {
   const model = instantiate('mountain');
-  // XZ는 크게(지평선까지), Y는 빌딩 위로 봉우리가 드러나게
-  model.scale.set(88, 16, 88);
+  // 얇은 링을 멀리 배치 → 지평선 실루엣 배경 산맥 (봉우리가 스카이라인 위로)
+  model.scale.set(52, 18, 52);
   model.position.y = -4;
   model.rotation.y = rng() * Math.PI * 2; // 방향 랜덤(판마다 다른 능선 노출)
   model.traverse((o) => {
     if (!o.isMesh) return;
-    // Blender 정점색(숲/바위/눈) x 게임 바위 디테일 텍스처, 언릿(야간 조명 무관)
-    // color>1 배수로 달빛 받은 산처럼 밝게 (baked 정점색이 어두워 야간에 묻히는 것 보정)
+    // Blender 정점색(숲/바위/눈) x 게임 바위 디테일 텍스처.
+    // fog 적용 → 원경 헤이즈에 녹아들어 밑동이 바닥과 자연스럽게 이어짐(뜨는 느낌 제거)
     const mat = new THREE.MeshBasicMaterial({
       map: mountainRockTexture(),
       vertexColors: true,
-      fog: false,
+      fog: true,
       side: THREE.DoubleSide,
     });
-    mat.color.setRGB(2.1, 2.1, 2.1);
+    mat.color.setRGB(2.4, 2.4, 2.4);
     o.material = mat;
     o.renderOrder = -10;
     o.frustumCulled = false;
