@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { pick, range } from '../utils/rng.js';
-import { getAssetTemplate } from '../utils/assets.js';
+import { getAssetTemplate, instantiate } from '../utils/assets.js';
 
 const SHOULDER = 2.2;        // 도로 가장자리 → 파라펫까지 갓길 폭
 const PARAPET_HEIGHT = 1.15;
@@ -184,7 +184,8 @@ function makeFacadeMaterial() {
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         {
           vec3 nrm = normalize(vLNorm);
-          if (abs(nrm.y) < 0.5) {                 // 지붕/바닥은 창 없음
+          float hasWindows = step(0.28, fract(vSeed * 0.0173)); // 약 28%는 창문 없는 빌딩
+          if (abs(nrm.y) < 0.5 && hasWindows > 0.5) {  // 지붕/바닥·무창 빌딩은 창 없음
             float hcoord = abs(nrm.x) > abs(nrm.z) ? vLPos.z : vLPos.x;
             float vcoord = vLPos.y;
             const float CW = 1.6, CH = 2.0;        // 창 셀 크기(로컬 단위)
@@ -386,134 +387,62 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
   buildInstancedBuildings(scene, 'buildingA', buildingLists.buildingA);
   buildInstancedBuildings(scene, 'buildingB', buildingLists.buildingB);
 
-  // 8) 원경 산맥: 부드러운 능선의 실루엣을 여러 겹 둘러 대기 원근으로 표현
-  buildMountainRanges(scene, rng, palette);
+  // 8) 원경 산맥 (Blender 3D 모델)
+  buildMountainRanges(scene, rng);
 
   return { lampHeads };
 }
 
-// 뾰족한 화강암 봉우리(북한산 느낌) 능선 링 지오메트리.
-// 사인 물결 대신 "뚜렷한 봉우리들"을 세워 각지고 험준한 실루엣을 만든다.
-// 정점 색으로 질감 표현: 아래=짙은 숲, 위=달빛 화강암 바위.
-function ridgeRing(radius, baseHeight, amp, seed, tint) {
-  const segments = 400; // 각진 봉우리를 살리려면 촘촘하게
-  const positions = [];
-  const colors = [];
-  const indices = [];
-
-  const cLow = new THREE.Color(tint.low);    // 산기슭 짙은 숲
-  const cHigh = new THREE.Color(tint.high);  // 능선 위 밝은 숲/바위
-  const cRock = new THREE.Color(tint.rock);  // 달빛 화강암 봉우리
-  const cBottom = cLow.clone().multiplyScalar(0.35); // 바닥은 더 어둡게
-
-  // 시드 기반 LCG
-  let s = (seed % 233280 + 233280) % 233280;
-  const rand = () => {
-    s = (s * 9301 + 49297) % 233280;
-    return s / 233280;
-  };
-
-  // 봉우리들: 각각 위치·높이·폭. 좁은 폭 + 뾰족한 프로파일로 화강암 첨봉 느낌
-  const peaks = [];
-  const numPeaks = 11 + Math.floor(rand() * 7);
-  for (let i = 0; i < numPeaks; i++) {
-    peaks.push({
-      t: rand(),
-      h: 0.3 + Math.pow(rand(), 1.6) * 0.7, // 대부분 낮고 일부만 우뚝
-      w: 0.018 + rand() * 0.05,
-      skew: rand() * 0.6 - 0.3, // 비대칭(한쪽이 급경사)
-    });
+// Blender 제작 3D 산맥 모델(mountain.glb)을 원경 배경으로 배치.
+// GLB의 PBR 머티리얼(바위 텍스처+정점색)을 언릿 MeshBasic으로 바꿔
+// 야간 조명과 무관하게 일정 밝기로 지평선에 보이게 한다.
+// 바위 디테일 텍스처(게임 생성): 밝은 회색 베이스에 어두운 알갱이·크랙.
+// GLB에 심은 UV(둘레 48회·반경 5회 반복)에 타일링되어 정점색과 곱해진다.
+let _rockTex = null;
+function mountainRockTexture() {
+  if (_rockTex) return _rockTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#cfcfcf';
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 3000; i++) {
+    const v = 90 + Math.random() * 90;
+    ctx.fillStyle = `rgba(${v},${v},${v},${0.15 + Math.random() * 0.25})`;
+    ctx.fillRect(Math.random() * 128, Math.random() * 128, 1, 1);
   }
-  // 잔봉(러프니스)용 좁은 스파이크
-  const spikes = [];
-  const numSpikes = 22 + Math.floor(rand() * 12);
-  for (let i = 0; i < numSpikes; i++) {
-    spikes.push({ t: rand(), h: 0.05 + rand() * 0.14, w: 0.006 + rand() * 0.012 });
+  ctx.strokeStyle = 'rgba(70,70,70,0.5)';
+  for (let i = 0; i < 30; i++) {
+    let x = Math.random() * 128, y = Math.random() * 128;
+    ctx.beginPath(); ctx.moveTo(x, y);
+    for (let j = 0; j < 5; j++) { x += (Math.random() - 0.5) * 24; y += (Math.random() - 0.5) * 24; ctx.lineTo(x, y); }
+    ctx.stroke();
   }
-
-  const circDist = (a, b) => {
-    let d = Math.abs(a - b);
-    return Math.min(d, 1 - d);
-  };
-  const heightAt = (t) => {
-    let m = 0.06; // 능선 바닥선
-    for (const p of peaks) {
-      // 비대칭 삼각 프로파일: 봉우리 정점에서 양쪽으로 급강하
-      let dt = t - p.t;
-      if (dt > 0.5) dt -= 1; else if (dt < -0.5) dt += 1;
-      const side = dt >= 0 ? 1 + p.skew : 1 - p.skew;
-      const f = Math.max(0, 1 - Math.abs(dt) / (p.w * side));
-      m = Math.max(m, p.h * Math.pow(f, 1.35));
-    }
-    for (const sp of spikes) {
-      const f = Math.max(0, 1 - circDist(t, sp.t) / sp.w);
-      m = Math.max(m, m * 0.5 + sp.h * f); // 기존 능선 위에 얹히는 잔봉
-    }
-    return m;
-  };
-
-  const bottom = -120; // 지평선 밑으로 깊게 내려 묻히게
-  const tmp = new THREE.Color();
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const angle = t * Math.PI * 2;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius;
-    const hRatio = heightAt(t); // 0~1 능선 높이
-    const top = baseHeight + hRatio * amp;
-    positions.push(x, bottom, z, x, top, z);
-
-    // 정점 색: 바닥=어두운 숲, 정상부=밝은 숲→바위(높은 봉우리일수록 화강암)
-    const jitter = 0.9 + rand() * 0.2; // 능선따라 미세 밝기 변화(질감)
-    tmp.copy(cLow).lerp(cHigh, THREE.MathUtils.smoothstep(hRatio, 0.15, 0.7));
-    if (hRatio > 0.62) {
-      tmp.lerp(cRock, THREE.MathUtils.smoothstep(hRatio, 0.62, 0.95) * 0.7);
-    }
-    tmp.multiplyScalar(jitter);
-    colors.push(cBottom.r, cBottom.g, cBottom.b, tmp.r, tmp.g, tmp.b);
-
-    if (i < segments) {
-      const a = i * 2;
-      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-    }
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  return geo;
+  _rockTex = new THREE.CanvasTexture(c);
+  _rockTex.wrapS = _rockTex.wrapT = THREE.RepeatWrapping;
+  return _rockTex;
 }
 
-function buildMountainRanges(scene, rng, palette) {
-  // 달빛 받은 짙은 숲 초록. 뒤로 갈수록 하늘색(대기 원근)에 녹아든다.
-  // 앞 능선일수록 진한 초록, 먼 능선은 푸르스름하게.
-  const layers = [
-    { radius: 1150, base: 55, amp: 320, haze: 0.78 },
-    { radius: 1040, base: 45, amp: 300, haze: 0.55 },
-    { radius: 950,  base: 35, amp: 270, haze: 0.34 },
-    { radius: 870,  base: 26, amp: 240, haze: 0.16 },
-  ];
-  const sky = new THREE.Color(palette.skyHorizon);
-  for (let li = 0; li < layers.length; li++) {
-    const L = layers[li];
-    // 대기 원근: 뒤 능선일수록 하늘색에 녹아들게 각 색을 sky와 섞음
-    const haze = L.haze;
-    const mixSky = (hex) => new THREE.Color(hex).lerp(sky, haze).getHex();
-    const tint = {
-      low: mixSky(0x16301f),   // 산기슭 짙은 숲
-      high: mixSky(0x2f5236),  // 능선 밝은 숲
-      rock: mixSky(0x6d7a72),  // 달빛 화강암(냉회록)
-    };
-    const geo = ridgeRing(L.radius, L.base, L.amp, Math.floor(rng() * 100000) + li * 777, tint);
+function buildMountainRanges(scene, rng) {
+  const model = instantiate('mountain');
+  // XZ는 크게(지평선까지), Y는 빌딩 위로 봉우리가 드러나게
+  model.scale.set(88, 16, 88);
+  model.position.y = -4;
+  model.rotation.y = rng() * Math.PI * 2; // 방향 랜덤(판마다 다른 능선 노출)
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    // Blender 정점색(숲/바위/눈) x 게임 바위 디테일 텍스처, 언릿(야간 조명 무관)
+    // color>1 배수로 달빛 받은 산처럼 밝게 (baked 정점색이 어두워 야간에 묻히는 것 보정)
     const mat = new THREE.MeshBasicMaterial({
+      map: mountainRockTexture(),
       vertexColors: true,
+      fog: false,
       side: THREE.DoubleSide,
-      fog: false, // 자체 대기 원근으로 처리(안개 far 밖)
     });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.renderOrder = -10 + li; // 먼 산부터 그려 겹침 순서 보장
-    scene.add(mesh);
-  }
+    mat.color.setRGB(2.1, 2.1, 2.1);
+    o.material = mat;
+    o.renderOrder = -10;
+    o.frustumCulled = false;
+  });
+  scene.add(model);
 }
