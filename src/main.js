@@ -99,5 +99,5 @@ $('#btn-menu').addEventListener('click', () => {
 
 // 개발·검증: ?auto=1 즉시 시작
 if (new URLSearchParams(location.search).get('auto') === '1') {
-  generateAndPlay();
+  generateAndPlay().catch((e) => console.error(e));
 }

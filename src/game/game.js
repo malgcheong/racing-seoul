@@ -419,11 +419,6 @@ export class Game {
     }
 
     const lookAt = car.position.clone().add(new THREE.Vector3(0, 1.8, 0));
-    // 개발용: 하늘 확인 (?lookup=1)
-    if (this._lookUp === undefined) {
-      this._lookUp = new URLSearchParams(location.search).get('lookup') === '1';
-    }
-    if (this._lookUp) lookAt.y += 900;
     this.camera.lookAt(lookAt);
   }
 

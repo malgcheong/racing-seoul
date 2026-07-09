@@ -11,6 +11,7 @@ const FILES = {
   treePine: '/assets/tree_pine.glb',
   buildingA: '/assets/building_a.glb',
   buildingB: '/assets/building_b.glb',
+  mountain: '/assets/mountain.glb',
 };
 
 const cache = {};
