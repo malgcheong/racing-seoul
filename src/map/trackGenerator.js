@@ -5,7 +5,8 @@
 import * as THREE from 'three';
 import { range } from '../utils/rng.js';
 
-export const TRACK_WIDTH = 16;
+export const TRACK_WIDTH = 30;   // 4차선(편도 2차선 x 양방향) + 중앙분리대
+export const MEDIAN_HALF = 1.4;  // 중앙분리대 반폭
 export const SAMPLE_COUNT = 900;
 export const DECK_HEIGHT = 14; // 고가도로 데크 높이
 
@@ -95,18 +96,19 @@ function createRoadTexture() {
       ctx.fillRect(lx + Math.random() * lw, Math.random() * S, 1 + Math.random() * 2, 3 + Math.random() * 8);
     }
   };
-  // 양측 흰 라인 (약간 누런 마모)
+  // 4차선(편도 2차선 x 2). U(가로)는 도로 폭 전체에 매핑.
+  // 양측 가장자리 흰 실선
   ctx.fillStyle = '#dcdcd2';
-  ctx.fillRect(12, 0, 12, S);
-  ctx.fillRect(S - 24, 0, 12, S);
-  wear(12, 12); wear(S - 24, 12);
-  // 중앙 점선(노랑, 마모)
-  ctx.fillStyle = '#e8bc44';
-  const cx = S / 2 - 7;
-  for (let y = 0; y < S; y += 128) {
-    ctx.fillRect(cx, y, 14, 74);
+  ctx.fillRect(9, 0, 10, S);
+  ctx.fillRect(S - 19, 0, 10, S);
+  wear(9, 10); wear(S - 19, 10);
+  // 각 방향 차로 구분 흰 점선 (편도 2차선의 가운데)
+  ctx.fillStyle = '#dcdcd2';
+  for (const dx of [S * 0.26, S * 0.74]) {
+    for (let y = 0; y < S; y += 110) ctx.fillRect(dx - 4, y, 8, 60);
+    wear(dx - 4, 8);
   }
-  wear(cx, 14);
+  // 중앙(분리대 자리)은 아스팔트 유지 — 분리대 메시가 덮음
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
@@ -185,6 +187,67 @@ export function buildRoadMesh(samples, width) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
+}
+
+// 중앙분리대: 도로 중앙선을 따라가는 낮은 콘크리트 연석 + 상단 발광 LED 라인.
+// 야간에 중앙 경계가 또렷하게 보이고, 게임에선 차가 넘지 못하게 막는다(game.js).
+export function buildMedian(samples) {
+  const n = samples.length;
+  const half = MEDIAN_HALF;
+  const H = 0.7;               // 연석 높이
+  const topPos = [], topUv = [], topIdx = [];
+  const sidePos = [], sideIdx = [];
+  const ledPos = [], ledIdx = [];
+  let dist = 0;
+
+  for (let i = 0; i <= n; i++) {
+    const s = samples[i % n];
+    if (i > 0) dist += s.pos.distanceTo(samples[(i - 1) % n].pos);
+    const y = s.pos.y;
+    const L = s.pos.clone().addScaledVector(s.left, half);
+    const R = s.pos.clone().addScaledVector(s.left, -half);
+    // 상단면
+    topPos.push(L.x, y + H, L.z, R.x, y + H, R.z);
+    topUv.push(0, dist / 4, 1, dist / 4);
+    // 양 측면 (지면 → 상단)
+    sidePos.push(L.x, y + 0.02, L.z, L.x, y + H, L.z, R.x, y + 0.02, R.z, R.x, y + H, R.z);
+    // LED 라인 (상단 중앙, 살짝 위)
+    ledPos.push(s.pos.x, y + H + 0.04, s.pos.z);
+    if (i < n) {
+      const a = i * 2;
+      topIdx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+      const b = i * 4;
+      sideIdx.push(b, b + 1, (i + 1) * 4, (i + 1) * 4, b + 1, (i + 1) * 4 + 1);       // 좌측면
+      sideIdx.push(b + 2, (i + 1) * 4 + 2, b + 3, b + 3, (i + 1) * 4 + 2, (i + 1) * 4 + 3); // 우측면
+    }
+  }
+
+  const group = new THREE.Group();
+
+  const topGeo = new THREE.BufferGeometry();
+  topGeo.setAttribute('position', new THREE.Float32BufferAttribute(topPos, 3));
+  topGeo.setAttribute('uv', new THREE.Float32BufferAttribute(topUv, 2));
+  topGeo.setIndex(topIdx);
+  topGeo.computeVertexNormals();
+  const top = new THREE.Mesh(topGeo, new THREE.MeshStandardMaterial({ color: 0x3a3d46, roughness: 0.9 }));
+  top.receiveShadow = true;
+  group.add(top);
+
+  const sideGeo = new THREE.BufferGeometry();
+  sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(sidePos, 3));
+  sideGeo.setIndex(sideIdx);
+  sideGeo.computeVertexNormals();
+  const side = new THREE.Mesh(sideGeo, new THREE.MeshStandardMaterial({
+    color: 0x2b2e37, roughness: 0.95, side: THREE.DoubleSide,
+  }));
+  group.add(side);
+
+  const ledGeo = new THREE.BufferGeometry();
+  ledGeo.setAttribute('position', new THREE.Float32BufferAttribute(ledPos, 3));
+  const led = new THREE.LineLoop(ledGeo, new THREE.LineBasicMaterial({ color: 0xffb454 }));
+  group.add(led);
+
+  return group;
 }
 
 // 출발/결승 체커 라인
