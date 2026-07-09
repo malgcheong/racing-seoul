@@ -215,8 +215,8 @@ export class Game {
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    // 야간: 안개를 당겨 원경이 어둠에 묻히게
-    this.scene.fog = new THREE.Fog(this.palette.fog, 130, 800);
+    // 야간: 안개(원경 깊이감). 배경 산맥까지 바닥이 이어지고 산은 헤이즈에 녹아들도록
+    this.scene.fog = new THREE.Fog(this.palette.fog, 220, 2800);
 
     this.camera = new THREE.PerspectiveCamera(
       BASE_FOV,
