@@ -348,35 +348,60 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
   return { lampHeads };
 }
 
-// 부드러운 능선 실루엣 링 지오메트리 하나 생성 (원통을 둘러싼 fBm 높이 곡선)
-// baseY 아래는 지평선 밑으로 내려 안개/지형에 자연스럽게 묻히게 한다.
-function ridgeRing(radius, baseHeight, amp, seed, roughness) {
-  const segments = 200;
+// 뾰족한 화강암 봉우리(북한산 느낌) 능선 링 지오메트리.
+// 사인 물결 대신 "뚜렷한 봉우리들"을 세워 각지고 험준한 실루엣을 만든다.
+function ridgeRing(radius, baseHeight, amp, seed) {
+  const segments = 400; // 각진 봉우리를 살리려면 촘촘하게
   const positions = [];
   const indices = [];
 
-  // 시드 기반 다중 사인 합(fBm 유사)으로 능선 높이 프로파일
-  const octaves = [];
-  let s = seed;
-  for (let o = 0; o < 5; o++) {
+  // 시드 기반 LCG
+  let s = (seed % 233280 + 233280) % 233280;
+  const rand = () => {
     s = (s * 9301 + 49297) % 233280;
-    octaves.push({
-      freq: (o + 1) * (1.2 + roughness),
-      phase: (s / 233280) * Math.PI * 2,
-      weight: 1 / (o + 1),
-    });
-  }
-  const heightAt = (t) => {
-    let h = 0;
-    let wsum = 0;
-    for (const oc of octaves) {
-      h += Math.sin(t * Math.PI * 2 * oc.freq + oc.phase) * oc.weight;
-      wsum += oc.weight;
-    }
-    return (h / wsum) * 0.5 + 0.5; // 0~1
+    return s / 233280;
   };
 
-  const bottom = -80; // 지평선 아래까지 내려 묻히게
+  // 봉우리들: 각각 위치·높이·폭. 좁은 폭 + 뾰족한 프로파일로 화강암 첨봉 느낌
+  const peaks = [];
+  const numPeaks = 11 + Math.floor(rand() * 7);
+  for (let i = 0; i < numPeaks; i++) {
+    peaks.push({
+      t: rand(),
+      h: 0.3 + Math.pow(rand(), 1.6) * 0.7, // 대부분 낮고 일부만 우뚝
+      w: 0.018 + rand() * 0.05,
+      skew: rand() * 0.6 - 0.3, // 비대칭(한쪽이 급경사)
+    });
+  }
+  // 잔봉(러프니스)용 좁은 스파이크
+  const spikes = [];
+  const numSpikes = 22 + Math.floor(rand() * 12);
+  for (let i = 0; i < numSpikes; i++) {
+    spikes.push({ t: rand(), h: 0.05 + rand() * 0.14, w: 0.006 + rand() * 0.012 });
+  }
+
+  const circDist = (a, b) => {
+    let d = Math.abs(a - b);
+    return Math.min(d, 1 - d);
+  };
+  const heightAt = (t) => {
+    let m = 0.06; // 능선 바닥선
+    for (const p of peaks) {
+      // 비대칭 삼각 프로파일: 봉우리 정점에서 양쪽으로 급강하
+      let dt = t - p.t;
+      if (dt > 0.5) dt -= 1; else if (dt < -0.5) dt += 1;
+      const side = dt >= 0 ? 1 + p.skew : 1 - p.skew;
+      const f = Math.max(0, 1 - Math.abs(dt) / (p.w * side));
+      m = Math.max(m, p.h * Math.pow(f, 1.35));
+    }
+    for (const sp of spikes) {
+      const f = Math.max(0, 1 - circDist(t, sp.t) / sp.w);
+      m = Math.max(m, m * 0.5 + sp.h * f); // 기존 능선 위에 얹히는 잔봉
+    }
+    return m;
+  };
+
+  const bottom = -120; // 지평선 밑으로 깊게 내려 묻히게
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
     const angle = t * Math.PI * 2;
@@ -398,19 +423,19 @@ function ridgeRing(radius, baseHeight, amp, seed, roughness) {
 }
 
 function buildMountainRanges(scene, rng, palette) {
-  // 뒤로 갈수록 옅어지는(대기 원근) 4겹 실루엣.
-  // 하늘 지평선 색과 섞어 가장 먼 산은 거의 하늘에 녹아들게 한다.
+  // 달빛 받은 짙은 숲 초록. 뒤로 갈수록 하늘색(대기 원근)에 녹아든다.
+  // 앞 능선일수록 진한 초록, 먼 능선은 푸르스름하게.
   const layers = [
-    { radius: 1150, base: 40, amp: 210, haze: 0.82 },
-    { radius: 1050, base: 30, amp: 170, haze: 0.62 },
-    { radius: 960,  base: 22, amp: 140, haze: 0.42 },
-    { radius: 880,  base: 15, amp: 110, haze: 0.24 },
+    { radius: 1150, base: 55, amp: 320, haze: 0.78 },
+    { radius: 1040, base: 45, amp: 300, haze: 0.55 },
+    { radius: 950,  base: 35, amp: 270, haze: 0.34 },
+    { radius: 870,  base: 26, amp: 240, haze: 0.16 },
   ];
-  const ridgeBase = new THREE.Color(0x0a0e1e); // 가까운 능선의 짙은 남색
+  const forest = new THREE.Color(0x1f3a26); // 달빛 숲 초록
   for (let li = 0; li < layers.length; li++) {
     const L = layers[li];
-    const color = ridgeBase.clone().lerp(new THREE.Color(palette.skyHorizon), L.haze);
-    const geo = ridgeRing(L.radius, L.base, L.amp, Math.floor(rng() * 100000) + li * 777, 0.4 + li * 0.15);
+    const color = forest.clone().lerp(new THREE.Color(palette.skyHorizon), L.haze);
+    const geo = ridgeRing(L.radius, L.base, L.amp, Math.floor(rng() * 100000) + li * 777);
     const mat = new THREE.MeshBasicMaterial({
       color,
       side: THREE.DoubleSide,
