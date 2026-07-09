@@ -157,7 +157,57 @@ function addInstanced(scene, geometry, material, matrices, { colors = null, cast
   return im;
 }
 
-// 빌딩 에셋의 프리미티브별 InstancedMesh 생성 (외벽/창문은 instanceColor)
+// 절차적 창문 외벽 머티리얼: object 공간 좌표로 창 격자를 계산해
+// 스케일·회전에 뭉개지지 않는 깔끔한 창문. 창마다 랜덤 점등(따뜻/차가운 빛)되고
+// 켜진 창은 발광(bloom)한다. instanceColor로 외벽 색을, aSeed로 창 패턴을 개별화.
+function makeFacadeMaterial() {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.82, metalness: 0.0,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aSeed;
+        varying float vSeed;
+        varying vec3 vLPos;
+        varying vec3 vLNorm;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vSeed = aSeed;
+        vLPos = position;
+        vLNorm = normal;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying float vSeed;
+        varying vec3 vLPos;
+        varying vec3 vLNorm;
+        float hash21(vec2 p){ p = fract(p*vec2(123.34,345.45)); p += dot(p,p+34.345); return fract(p.x*p.y); }`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          vec3 nrm = normalize(vLNorm);
+          if (abs(nrm.y) < 0.5) {                 // 지붕/바닥은 창 없음
+            float hcoord = abs(nrm.x) > abs(nrm.z) ? vLPos.z : vLPos.x;
+            float vcoord = vLPos.y;
+            const float CW = 1.6, CH = 2.0;        // 창 셀 크기(로컬 단위)
+            vec2 cell = vec2(floor(hcoord/CW), floor(vcoord/CH));
+            vec2 fr = vec2(fract(hcoord/CW), fract(vcoord/CH));
+            float win = step(0.16, fr.x)*step(fr.x, 0.84)*step(0.16, fr.y)*step(fr.y, 0.80);
+            float faceId = nrm.x > 0.5 ? 0.0 : (nrm.x < -0.5 ? 1.0 : (nrm.z > 0.5 ? 2.0 : 3.0));
+            float r = hash21(cell + vec2(vSeed*57.3 + faceId*11.7, vSeed*19.1 + 3.0));
+            float lit = step(0.46, r);             // 약 54% 점등
+            vec3 warm = vec3(1.0, 0.80, 0.48);
+            vec3 cool = vec3(0.60, 0.76, 1.0);
+            vec3 wcol = mix(warm, cool, step(0.72, fract(r*7.0)));
+            float flick = 0.55 + 0.45*fract(r*131.0);
+            totalEmissiveRadiance += win * lit * wcol * flick * 1.5;
+            diffuseColor.rgb *= (1.0 - win*0.55);  // 창 부분 외벽은 어둡게(유리 느낌)
+          }
+        }`);
+  };
+  return mat;
+}
+
+// 빌딩 에셋 인스턴싱. 외벽은 절차적 창문 머티리얼(+aSeed), 창문 스트립은 생략,
+// 지붕 트림은 원래 색 유지.
 function buildInstancedBuildings(scene, type, list) {
   if (!list.length) return;
   const meshes = [];
@@ -165,20 +215,26 @@ function buildInstancedBuildings(scene, type, list) {
 
   for (const mesh of meshes) {
     const name = mesh.material.name;
-    let material = mesh.material;
-    let colors = null;
+    if (name === 'Window') continue; // 절차적 창문으로 대체
+
     if (name === 'Facade') {
-      material = mesh.material.clone();
-      material.color.set(0xffffff); // instanceColor가 곱해짐
-      colors = list.map((b) => b.facade);
-    } else if (name === 'Window') {
-      material = new THREE.MeshBasicMaterial({ color: 0xffffff }); // 야간 발광(언릿)
-      colors = list.map((b) => b.window);
+      const geo = mesh.geometry.clone();
+      const seeds = new Float32Array(list.map((b) => b.seed));
+      geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+      const im = new THREE.InstancedMesh(geo, makeFacadeMaterial(), list.length);
+      list.forEach((b, i) => {
+        im.setMatrixAt(i, b.matrix);
+        im.setColorAt(i, b.facade);
+      });
+      im.instanceMatrix.needsUpdate = true;
+      im.instanceColor.needsUpdate = true;
+      im.castShadow = true;
+      im.frustumCulled = false;
+      scene.add(im);
+    } else {
+      // RoofTrim 등: 원래 머티리얼 유지
+      addInstanced(scene, mesh.geometry, mesh.material, list.map((b) => b.matrix));
     }
-    addInstanced(scene, mesh.geometry, material, list.map((b) => b.matrix), {
-      colors,
-      castShadow: name === 'Facade',
-    });
   }
 }
 
@@ -296,12 +352,7 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
     map: lightPoolTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
   }), poolMatrices);
 
-  // 7) 지상 빌딩 스카이라인 (에셋 타입별 인스턴싱, 색은 instanceColor)
-  const WINDOW_VARIANTS = [
-    { color: new THREE.Color(0xffc978), p: 0.45 }, // 따뜻한 불빛
-    { color: new THREE.Color(0x9fc0ff), p: 0.25 }, // 차가운 불빛
-    { color: new THREE.Color(0x0d1018), p: 0.3 },  // 소등
-  ];
+  // 7) 지상 빌딩 스카이라인 (외벽은 절차적 창문 셰이더, 색은 instanceColor)
   const buildingLists = { buildingA: [], buildingB: [] };
   const coarse = samples.filter((_, i) => i % 8 === 0).map((s) => s.pos);
   for (const side of [-1, 1]) {
@@ -318,13 +369,6 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
 
       if (minDistToTrack(x, z, coarse) >= Math.min(off - 1, 12)) {
         const accent = pick(rng, palette.accents);
-        const roll = rng();
-        let acc = 0;
-        let winColor = WINDOW_VARIANTS[WINDOW_VARIANTS.length - 1].color;
-        for (const v of WINDOW_VARIANTS) {
-          acc += v.p;
-          if (roll < acc) { winColor = v.color; break; }
-        }
         const type = rng() > 0.5 ? 'buildingA' : 'buildingB';
         buildingLists[type].push({
           matrix: composeMatrix(
@@ -332,8 +376,8 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
             Math.atan2(-s.left.x * side, -s.left.z * side),
             new THREE.Vector3(sc, scy, sc)
           ),
-          facade: lerpColor(pick(rng, [accent]), 0x2a2e40, 0.75),
-          window: winColor,
+          facade: lerpColor(accent, 0x20242f, 0.82), // 야간 외벽: 어둡게(창문이 도드라지게)
+          seed: rng() * 1000,
         });
       }
       i += Math.max(3, Math.round((alongWidth + 1.2) / segLen));
