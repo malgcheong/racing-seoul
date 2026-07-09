@@ -396,50 +396,23 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth) {
 // Blender 제작 3D 산맥 모델(mountain.glb)을 원경 배경으로 배치.
 // GLB의 PBR 머티리얼(바위 텍스처+정점색)을 언릿 MeshBasic으로 바꿔
 // 야간 조명과 무관하게 일정 밝기로 지평선에 보이게 한다.
-// 바위 디테일 텍스처(게임 생성): 밝은 회색 베이스에 어두운 알갱이·크랙.
-// GLB에 심은 UV(둘레 48회·반경 5회 반복)에 타일링되어 정점색과 곱해진다.
-let _rockTex = null;
-function mountainRockTexture() {
-  if (_rockTex) return _rockTex;
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#cfcfcf';
-  ctx.fillRect(0, 0, 128, 128);
-  for (let i = 0; i < 3000; i++) {
-    const v = 90 + Math.random() * 90;
-    ctx.fillStyle = `rgba(${v},${v},${v},${0.15 + Math.random() * 0.25})`;
-    ctx.fillRect(Math.random() * 128, Math.random() * 128, 1, 1);
-  }
-  ctx.strokeStyle = 'rgba(70,70,70,0.5)';
-  for (let i = 0; i < 30; i++) {
-    let x = Math.random() * 128, y = Math.random() * 128;
-    ctx.beginPath(); ctx.moveTo(x, y);
-    for (let j = 0; j < 5; j++) { x += (Math.random() - 0.5) * 24; y += (Math.random() - 0.5) * 24; ctx.lineTo(x, y); }
-    ctx.stroke();
-  }
-  _rockTex = new THREE.CanvasTexture(c);
-  _rockTex.wrapS = _rockTex.wrapT = THREE.RepeatWrapping;
-  return _rockTex;
-}
-
 function buildMountainRanges(scene, rng) {
   const model = instantiate('mountain');
-  // 얇은 링을 멀리 배치 → 지평선 실루엣 배경 산맥 (봉우리가 스카이라인 위로)
-  model.scale.set(52, 18, 52);
+  // 얇은 링을 멀리 배치 → 지평선 배경 산맥
+  model.scale.set(58, 15, 58);
   model.position.y = -4;
   model.rotation.y = rng() * Math.PI * 2; // 방향 랜덤(판마다 다른 능선 노출)
   model.traverse((o) => {
     if (!o.isMesh) return;
-    // Blender 정점색(숲/바위/눈) x 게임 바위 디테일 텍스처.
-    // fog 적용 → 원경 헤이즈에 녹아들어 밑동이 바닥과 자연스럽게 이어짐(뜨는 느낌 제거)
-    const mat = new THREE.MeshBasicMaterial({
-      map: mountainRockTexture(),
+    // 조명 받는 재질(Lambert) → 달빛에 능선 음영이 생겨 3D 입체감. 텍스처 없음.
+    // color 배수로 야간 어둠 보정, emissive로 그림자면이 완전 검정 되지 않게.
+    const mat = new THREE.MeshLambertMaterial({
       vertexColors: true,
       fog: true,
       side: THREE.DoubleSide,
     });
-    mat.color.setRGB(2.4, 2.4, 2.4);
+    mat.color.setRGB(3.2, 3.2, 3.2);
+    mat.emissive.setRGB(0.04, 0.07, 0.05);
     o.material = mat;
     o.renderOrder = -10;
     o.frustumCulled = false;
