@@ -115,6 +115,53 @@ body {
 .consent-box label { cursor: pointer; }
 .consent-box input { margin-right: 8px; accent-color: var(--accent); }
 
+/* ---------- 차량 선택 화면 ---------- */
+#screen-select {
+  background:
+    radial-gradient(ellipse at 50% 120%, #1a2450 0%, transparent 60%),
+    linear-gradient(180deg, #04050f 0%, #0a0f22 100%);
+}
+.select-wrap {
+  min-height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px; padding: 32px 24px;
+}
+.select-title { font-size: 34px; letter-spacing: 2px; font-weight: 800; }
+.select-sub { color: var(--muted); margin-bottom: 22px; }
+.car-cards {
+  display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
+  width: min(920px, 94vw);
+}
+.car-card {
+  flex: 1 1 300px; max-width: 420px; background: var(--panel);
+  border-radius: 16px; overflow: hidden; border: 2px solid transparent;
+  cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s;
+}
+.car-card:hover { transform: translateY(-3px); }
+.car-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 12px 40px rgba(255, 180, 84, .18);
+}
+.car-card .preview {
+  width: 100%; aspect-ratio: 16 / 10; display: block;
+  background: radial-gradient(ellipse at 50% 70%, #22305a 0%, transparent 70%),
+    linear-gradient(180deg, #141a30 0%, #0a0e1c 100%);
+}
+.car-card .car-info { padding: 14px 16px 16px; }
+.car-card .car-name {
+  font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;
+}
+.car-card .car-swatch {
+  width: 14px; height: 14px; border-radius: 50%; display: inline-block;
+  box-shadow: 0 0 8px currentColor;
+}
+.car-card .car-tag { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.car-card .car-loading {
+  width: 100%; aspect-ratio: 16 / 10; display: flex;
+  align-items: center; justify-content: center; color: var(--muted); font-size: 14px;
+}
+.select-btns { display: flex; gap: 12px; align-items: center; margin-top: 26px; }
+.select-btns .btn-big { margin-top: 0; min-width: 240px; width: auto; }
+
 /* ---------- 생성 화면 ---------- */
 .gen-wrap {
   height: 100%; display: flex; flex-direction: column;
@@ -157,6 +204,26 @@ body {
   animation: pulse .4s infinite alternate;
 }
 @keyframes pulse { from { opacity: .7; } to { opacity: 1; transform: translateX(-50%) scale(1.06); } }
+
+/* 부스터 게이지(칼치기 충전) */
+.boost-gauge {
+  position: absolute; left: 28px; bottom: 32px; width: 200px; height: 12px;
+  border-radius: 999px; background: rgba(10, 12, 25, .55);
+  border: 1px solid rgba(255,255,255,.15); overflow: hidden;
+}
+.boost-fill {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent2), var(--accent));
+  transition: width .12s linear;
+}
+/* 니어미스 팝업 */
+.nearmiss {
+  position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+  text-align: center; pointer-events: none; text-shadow: 0 2px 14px rgba(0,0,0,.7);
+}
+.nearmiss .nm-label { font-size: 26px; font-weight: 800; color: var(--accent); letter-spacing: 1px; }
+.nearmiss .nm-label.close { color: #ff5d7a; }
+.nearmiss .nm-sub { font-size: 17px; color: var(--muted); margin-top: 4px; }
 
 /* 주의: 게임 캔버스 위에서는 backdrop-filter가 매 프레임 블러 비용을 유발하므로 금지 */
 

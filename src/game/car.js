@@ -1,91 +1,145 @@
-// 아케이드 차량 물리 + Blender 제작 로우폴리 차량 모델
+// 물리 엔진(cannon-es) 기반 차량. 평면 강체 + 아케이드 구동 모델.
+// 공개 인터페이스는 기존과 동일(group, speed, heading, speedKmh, placeAt, boost, update)
 
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import { instantiate } from '../utils/assets.js';
+import { makeCarBody } from './physics.js';
 
-const ACCEL = 28;
-const BRAKE = 55;
-const MAX_SPEED = 36;          // m/s (표시상 약 130km/h) — 야간 드라이브 페이스
-const MAX_REVERSE = -10;
-const FRICTION = 12;
-const OFFROAD_FACTOR = 0.45;   // 오프로드 시 최고 속도 배율
-const STEER_RATE = 1.4;   // 좌우 조향 민감도 (낮출수록 완만)
+// ── 튜닝 상수(브라우저에서 조작감 보고 조절) ──
+const MASS = 1200;
+const ENGINE = 15500;       // 구동력(N) — 0→최고속 도달이 답답하지 않게
+const BRAKE = 20000;
+const REVERSE = 5000;
+const MAX_SPEED = 42;       // m/s
+const MAX_YAW = 1.0;        // 최대 요 회전속도(rad/s) — 너무 높으면 휙휙 돎
+const GRIP = 11;            // 측면 접지(클수록 안 미끄러짐)
+const DRIFT_GRIP = 2.6;     // 드리프트 시 접지
+
+const _v1 = new CANNON.Vec3();
 
 export class Car {
-  constructor(color = 0xff5533) {
-    // Blender 에셋(car.glb): Body + Wheel_FL/FR/RL/RR.
-    // 카페인트는 고정 메탈릭 오렌지(GLB 재질 그대로) — 팔레트 틴트 안 함.
+  constructor(modelName = 'car2', world, startPos = { x: 0, y: 0, z: 0 }) {
     this.group = new THREE.Group();
-    const model = instantiate('car');
-    model.rotation.y = Math.PI; // 에셋 앞이 +Y(=-Z) → 게임 전방(+Z)에 맞춰 180° 회전
+    const model = instantiate(modelName);
+    model.rotation.y = Math.PI; // 에셋 앞 보정(기존과 동일)
+    this.model = model;
     this.group.add(model);
     this.wheels = ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']
       .map((n) => model.getObjectByName(n))
       .filter(Boolean);
-    this.speed = 0;
-    this.heading = 0;
+    this.body = makeCarBody(world, { w: 2.2, h: 1.0, l: 5.2, mass: MASS, pos: startPos });
     this.boostTimer = 0;
+    this.roll = 0;
+
+    // 후미등: Blender에서 모델에 넣은 발광 재질(LightR*)을 찾아 사용.
+    // 평소엔 은은한 러닝라이트, 감속 시 밝게. (재질은 복제해 프리뷰 등에 영향 없게)
+    this.tailMats = [];
+    this.tailBase = 1.0;
+    model.traverse((o) => {
+      if (!o.isMesh || !o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((mat, i) => {
+        if (!mat || !/^LightR/.test(mat.name || '')) return;
+        const cl = mat.clone();
+        cl.emissive = new THREE.Color(0xff1414);
+        cl.emissiveIntensity = this.tailBase;
+        if (Array.isArray(o.material)) o.material[i] = cl;
+        else o.material = cl;
+        this.tailMats.push(cl);
+      });
+    });
+
+    this.sync();
+  }
+
+  // 월드 전방 단위벡터(로컬 +Z)
+  forward(out = _v1) {
+    out.set(0, 0, 1);
+    return this.body.quaternion.vmult(out, out);
+  }
+
+  get speed() {
+    const f = this.forward();
+    return this.body.velocity.x * f.x + this.body.velocity.z * f.z; // 전진 성분(부호 포함)
+  }
+  get speedKmh() {
+    return Math.abs(Math.round(this.speed * 3.6));
+  }
+  get heading() {
+    const f = this.forward();
+    return Math.atan2(f.x, f.z);
   }
 
   placeAt(position, heading) {
-    this.group.position.copy(position);
-    this.heading = heading;
-    this.speed = 0;
-    this.group.rotation.set(0, heading, 0);
+    const b = this.body;
+    b.position.set(position.x, position.y, position.z);
+    b.velocity.setZero();
+    b.angularVelocity.setZero();
+    b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), heading);
+    this.sync();
   }
 
   boost(duration = 2) {
     this.boostTimer = Math.max(this.boostTimer, duration);
   }
 
-  update(dt, input, onRoad) {
+  update(dt, input) {
+    const b = this.body;
+    const f = this.forward();
+    const fx = f.x, fz = f.z; // _v1은 아래서 재사용되므로 성분을 미리 복사
+    const fwd = b.velocity.x * fx + b.velocity.z * fz;
+
+    // 구동/제동
+    let drive = 0;
+    if (input.forward) drive = ENGINE;
+    else if (input.backward) drive = fwd > 0.5 ? -BRAKE : -REVERSE;
     const boosting = this.boostTimer > 0;
-    if (boosting) this.boostTimer -= dt;
+    if (boosting) { drive *= 1.6; this.boostTimer -= dt; }
+    if (fwd > (boosting ? MAX_SPEED * 1.4 : MAX_SPEED) && drive > 0) drive = 0;
+    // 무게중심에 순수 선형력(토크 X). applyForce의 상대점 인자 오용 금지.
+    b.force.x += fx * drive;
+    b.force.z += fz * drive;
 
-    let maxSpeed = MAX_SPEED * (onRoad ? 1 : OFFROAD_FACTOR);
-    let accel = ACCEL;
-    if (boosting) {
-      maxSpeed *= 1.45;
-      accel *= 2;
-    }
-
-    if (input.forward) {
-      this.speed += accel * dt;
-    } else if (input.backward) {
-      this.speed -= (this.speed > 0 ? BRAKE : ACCEL * 0.6) * dt;
-    } else {
-      // 자연 감속
-      const decel = FRICTION * (onRoad ? 1 : 2.4) * dt;
-      if (this.speed > 0) this.speed = Math.max(0, this.speed - decel);
-      else this.speed = Math.min(0, this.speed + decel);
-    }
-    this.speed = Math.min(maxSpeed, Math.max(MAX_REVERSE, this.speed));
-
-    // 속도가 있어야 조향 (저속에서 더 민감)
-    const speedRatio = Math.min(1, Math.abs(this.speed) / 20);
+    // 조향: 속도 있을 때 요 회전속도를 목표치로 부드럽게.
+    // 고속일수록 민감도를 낮춰(10m/s 초과분 비례 감쇠) 살짝만 눌러도 휙 도는 느낌 제거.
     const steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
-    const drift = input.drift ? 1.5 : 1;
-    if (Math.abs(this.speed) > 0.3) {
-      this.heading += steer * STEER_RATE * drift * speedRatio * dt * Math.sign(this.speed);
-    }
+    const speedFactor = Math.min(1, Math.abs(fwd) / 7);
+    const highDamp = 1 / (1 + Math.max(0, Math.abs(fwd) - 10) * 0.03);
+    const targetYaw = steer * MAX_YAW * speedFactor * highDamp * (fwd < -0.5 ? -1 : 1) * (input.drift ? 1.35 : 1);
+    b.angularVelocity.y = THREE.MathUtils.lerp(b.angularVelocity.y, targetYaw, Math.min(1, 6 * dt));
 
-    this.group.position.x += Math.sin(this.heading) * this.speed * dt;
-    this.group.position.z += Math.cos(this.heading) * this.speed * dt;
-    this.group.rotation.y = this.heading;
+    // 측면 접지(그립): 옆으로 미끄러지는 속도를 제거 → 드리프트 시 약하게
+    const rx = fz, rz = -fx; // 오른쪽 벡터(수평)
+    const lat = b.velocity.x * rx + b.velocity.z * rz;
+    const k = input.drift ? DRIFT_GRIP : GRIP;
+    const frac = Math.min(1, k * dt);
+    b.velocity.x -= rx * lat * frac;
+    b.velocity.z -= rz * lat * frac;
 
-    // 시각 효과: 바퀴 회전, 코너링 시 바디 롤
-    // 물리적으로 정확한 회전 속도는 고속에서 프레임당 90°+ 돌아가 스트로빙
-    // (순간이동처럼 보임) → 시각적 회전 속도에 상한을 둔다
-    const spinRate = THREE.MathUtils.clamp(this.speed * 2, -9, 9); // rad/s
-    for (const w of this.wheels) w.rotateX(spinRate * dt);
-    this.group.rotation.z = THREE.MathUtils.lerp(
-      this.group.rotation.z,
-      steer * speedRatio * 0.06,
-      0.15
-    );
+    // 폭주 방지: 총 속도 상한
+    const sp = Math.hypot(b.velocity.x, b.velocity.z);
+    const cap = boosting ? 70 : 58;
+    if (sp > cap) { b.velocity.x *= cap / sp; b.velocity.z *= cap / sp; }
+
+    // 후미등: 브레이크(↓/S)로 감속하거나, 스로틀 뗀 채 달려 감속 중일 때 밝게
+    const braking = (input.backward && fwd > 0.3) || (!input.forward && !boosting && fwd > 5);
+    const ti = braking ? this.tailBase * 3.5 : this.tailBase;
+    for (const m of this.tailMats) m.emissiveIntensity = ti;
+
+    // 시각 효과
+    const spin = THREE.MathUtils.clamp(fwd * 2, -9, 9);
+    for (const w of this.wheels) w.rotateX(spin * dt);
+    this.roll = THREE.MathUtils.lerp(this.roll, -steer * speedFactor * 0.06, 0.15);
+    this.model.rotation.z = this.roll;
   }
 
-  get speedKmh() {
-    return Math.abs(Math.round(this.speed * 3.6));
+  // 물리 바디 → 메시 동기화
+  sync() {
+    const p = this.body.position;
+    this.group.position.set(p.x, p.y, p.z);
+    const q = this.body.quaternion;
+    this.group.quaternion.set(q.x, q.y, q.z, q.w);
+    this.model.rotation.z = this.roll; // yaw는 그룹, roll은 모델
   }
 }
