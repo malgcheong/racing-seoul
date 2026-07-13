@@ -16,6 +16,19 @@
     </div>
   </section>
 
+  <!-- 1.5 차량 선택 화면 -->
+  <section id="screen-select" class="screen">
+    <div class="select-wrap">
+      <h2 class="select-title">차량 선택</h2>
+      <p class="select-sub">오늘 밤 몰고 나갈 머신을 골라보세요.</p>
+      <div id="car-cards" class="car-cards"></div>
+      <div class="select-btns">
+        <button id="btn-select-back" class="btn btn-ghost" type="button">← 뒤로</button>
+        <button id="btn-select-confirm" class="btn btn-primary btn-big" type="button">이 차로 주행 시작</button>
+      </div>
+    </div>
+  </section>
+
   <!-- 2. 로딩 화면 -->
   <section id="screen-generating" class="screen">
     <div class="gen-wrap">
@@ -30,25 +43,30 @@
     <div id="game-container"></div>
     <div id="hud" class="hud hidden">
       <div class="hud-top">
-        <div class="hud-item"><span class="hud-label">LAP</span><span id="hud-lap">1/3</span></div>
+        <div class="hud-item"><span class="hud-label">진행</span><span id="hud-lap">0%</span></div>
         <div class="hud-item"><span class="hud-label">TIME</span><span id="hud-time">0:00.0</span></div>
-        <div class="hud-item"><span class="hud-label">SCORE</span><span id="hud-score">0</span></div>
+        <div class="hud-item"><span class="hud-label">평균 km/h</span><span id="hud-score">0</span></div>
       </div>
       <div class="hud-speed"><span id="hud-speed">0</span><span class="hud-unit">km/h</span></div>
       <div id="boost-indicator" class="boost-indicator hidden">🚀 부스터!</div>
+      <!-- 부스터 게이지(칼치기로 충전) -->
+      <div class="boost-gauge"><div id="boost-fill" class="boost-fill"></div></div>
+      <!-- 니어미스 팝업 -->
+      <div id="nearmiss" class="nearmiss hidden"></div>
     </div>
     <div id="countdown" class="countdown hidden"></div>
-    <div class="controls-hint">↑↓←→ / WASD 로 운전 · Shift 드리프트</div>
+    <div class="controls-hint">↑↓←→ / WASD 로 운전 · Shift 드리프트 · C 시점 전환</div>
   </section>
 
   <!-- 4. 결과 화면 -->
   <section id="screen-result" class="screen">
     <div class="result-wrap">
-      <h2>완주! 🏁</h2>
+      <h2 id="result-title">목적지 도착! 🏁</h2>
       <div class="result-stats">
+        <div class="result-row"><span>진행률</span><strong id="result-progress">-</strong></div>
+        <div class="result-row"><span>평균속도</span><strong id="result-score">-</strong></div>
         <div class="result-row"><span>총 기록</span><strong id="result-time">-</strong></div>
-        <div class="result-row"><span>베스트 랩</span><strong id="result-best">-</strong></div>
-        <div class="result-row"><span>점수</span><strong id="result-score">-</strong></div>
+        <div class="result-row"><span>최고 속도</span><strong id="result-best">-</strong></div>
       </div>
       <div class="result-btns">
         <button id="btn-restart" class="btn btn-primary" type="button">새로운 도시로 다시</button>
