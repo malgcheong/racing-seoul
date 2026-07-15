@@ -25,6 +25,8 @@ const FILES = {
   trafficBmw8: '/assets/traffic_bmw8.glb',         // "Bmw 8 car" by itsrit3sh
   trafficGClass: '/assets/traffic_gclass.glb',     // "Mercedes Benz G-Class W263" by Lexyc16
   trafficDamas: '/assets/traffic_damas.glb',       // "Chevrolet Damas" by own.guest
+  trafficBongo: '/assets/traffic_bongo.glb',       // "Hyundai Porter II (Bongo III)" by yunho98
+  trafficXcient: '/assets/traffic_xcient.glb',     // "Hyundai Xcient" by nguyenhoanglam20100609
   // Sketchfab "Car interior" by Gerhald (CC-BY) 기반 — 크레딧 표기 필요
   cockpitSf: '/assets/cockpit_sf.glb',
   // Sketchfab "Porsche 918 Spyder 2015" 실내 추출 (CC-BY) — 크레딧 표기 필요
