@@ -9,11 +9,6 @@ import * as CANNON from 'cannon-es';
 import { makeCarBody } from './physics.js';
 import { getAssetTemplate } from '../utils/assets.js';
 
-const TRAFFIC_COLORS = [
-  0xcfd3da, 0x9aa0ad, 0xb14a3a, 0x3a5ea8, 0xd8d8d8,
-  0x556070, 0x7a8290, 0xc9a23a, 0x2e3138, 0x8a5a2a,
-];
-
 // posAt() 스크래치 (할당 없는 경로 조회)
 const _posAtPos = new THREE.Vector3();
 const _posAtLeft = new THREE.Vector3();
@@ -57,20 +52,26 @@ function buildFromTemplate(tplName, tints) {
   return { group: g, tailMat, blinkL, blinkR };
 }
 
-// 승용 2종: Sketchfab 실차(아이오닉5·쏘나타) — TBody 틴트로 색상 배리에이션
-function makeIoniq5(rng) {
-  const color = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
+// 승용 2종: Sketchfab 실차(아이오닉5·쏘나타). 색상 틴트 없이 GLB 원본 색 유지
+// (사용자 요청 — 스폰마다 랜덤 색 변화 제거, 차종별 단일 색)
+function makeIoniq5() {
   return {
-    ...buildFromTemplate('trafficIoniq5', { TBody: color, TBody2: color }),
+    ...buildFromTemplate('trafficIoniq5', {}),
     dims: { w: 1.9, l: 4.64, mass: 1900, slow: false },
   };
 }
 
-function makeSonata(rng) {
-  const color = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
+function makeSonata() {
   return {
-    ...buildFromTemplate('trafficSonata', { TBody: color }),
+    ...buildFromTemplate('trafficSonata', {}),
     dims: { w: 1.87, l: 4.86, mass: 1500, slow: false },
+  };
+}
+
+function makeBmw8() {
+  return {
+    ...buildFromTemplate('trafficBmw8', {}),
+    dims: { w: 1.9, l: 4.84, mass: 1900, slow: false },
   };
 }
 
@@ -109,11 +110,12 @@ export class TrafficSystem {
     this.puppet = !!opts.puppet;
     const count = opts.count ?? 8;
     for (let i = 0; i < count; i++) {
-      // 차종 믹스: 승용차(실차 2종) 위주 + 고속버스 소수
+      // 차종 믹스: 승용차(실차 3종) 위주 + 고속버스 소수
       const roll = this.rng();
       let built;
-      if (roll < 0.44) built = makeIoniq5(this.rng);
-      else if (roll < 0.88) built = makeSonata(this.rng);
+      if (roll < 0.30) built = makeIoniq5();
+      else if (roll < 0.60) built = makeSonata();
+      else if (roll < 0.88) built = makeBmw8();
       else built = makeBus();
       const wrap = new THREE.Group();
       wrap.add(built.group);
