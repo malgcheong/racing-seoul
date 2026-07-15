@@ -6,11 +6,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const FILES = {
-  car2: '/assets/car2.glb',
-  car3: '/assets/car3.glb',
-  car4: '/assets/car4.glb',
-  car5: '/assets/car5.glb',
-  car6: '/assets/car6.glb',
+  // 플레이어 차량: 현재 918 단일(사용자 결정 2026-07-15)
   // Sketchfab "Porsche 918 Spyder 2015" by 3D Cars Studio (CC-BY) — 크레딧 표기 필요
   car7: '/assets/car7.glb',
   treeRound: '/assets/tree_round.glb',
@@ -21,10 +17,11 @@ const FILES = {
   mountainRange: '/assets/mountain_range.glb',
   assemblyHall: '/assets/landmark_assembly.glb',
   tower63: '/assets/landmark_63.glb',
-  trafficSedan: '/assets/traffic_sedan.glb',
-  trafficBoxTruck: '/assets/traffic_boxtruck.glb',
-  trafficContainer: '/assets/traffic_container.glb',
-  trafficDump: '/assets/traffic_dump.glb',
+  // 트래픽 3종: 전부 Sketchfab CC-BY (크레딧 index.html) — 사용자 결정(2026-07-15)으로
+  // 자체제작 트럭 3종 제외
+  trafficIoniq5: '/assets/traffic_ioniq5.glb',     // "Hyundai Ioniq 5 lowpoly" by andikapratamaw
+  trafficSonata: '/assets/traffic_sonata.glb',     // "2017 Hyundai Sonata Hybrid" by m3ika3D
+  trafficBus: '/assets/traffic_bus.glb',           // "1998 Hyundai Aero Space" by ImperialBlue3D
   // Sketchfab "Car interior" by Gerhald (CC-BY) 기반 — 크레딧 표기 필요
   cockpitSf: '/assets/cockpit_sf.glb',
   // Sketchfab "Porsche 918 Spyder 2015" 실내 추출 (CC-BY) — 크레딧 표기 필요

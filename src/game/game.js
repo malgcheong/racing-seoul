@@ -61,7 +61,7 @@ export class Game {
     this.palette = palette;
     // ui 콜백: { onHud, onCountdown, onFinish, onFail, onStandings, onRematch, onRematchGo }
     this.ui = ui;
-    this.carModel = opts.carModel || 'car2'; // 선택된 차량 에셋 이름
+    this.carModel = opts.carModel || 'car7'; // 선택된 차량 에셋 이름
     // URL 파라미터 스냅샷 — 게임 생성 시점 기준으로 한 번만 파싱해 전역에서 재사용
     // (개발·검증 파라미터 목록은 README 격인 메모리/주석 참고: seed·at·branch·rest·
     //  cam·tod·wx·hard·traffic·dpr·stats·top·autodrive·tclose·room·host·name)
@@ -546,7 +546,7 @@ export class Game {
       if (this.disposed) return; // 재대결 리빌드 중 구 게임 핸들러 잔류 방어
       let r = this.remotes.get(m._from);
       if (!r) {
-        r = new RemoteCar(this.scene, this.world, m.c || 'car2', this.mpLightPool.pop() || null);
+        r = new RemoteCar(this.scene, this.world, m.c || 'car7', this.mpLightPool.pop() || null);
         this.remotes.set(m._from, r);
       }
       if (m.n) r.setName(m.n); // 이름표(최초 1회 생성)

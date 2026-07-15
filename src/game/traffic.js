@@ -14,8 +14,6 @@ const TRAFFIC_COLORS = [
   0x556070, 0x7a8290, 0xc9a23a, 0x2e3138, 0x8a5a2a,
 ];
 
-const CONTAINER_COLORS = [0x2f6db5, 0xb14a3a, 0x3f7d4e, 0xd07a2c, 0x3b8a8f, 0x8a4f9e];
-
 // posAt() 스크래치 (할당 없는 경로 조회)
 const _posAtPos = new THREE.Vector3();
 const _posAtLeft = new THREE.Vector3();
@@ -45,7 +43,8 @@ function buildFromTemplate(tplName, tints) {
   g.traverse((o) => {
     if (!o.isMesh) return;
     const remap = (m) => {
-      if (m.name === 'TTail') {
+      // 후미등: GLB 익스포트 시 이름에 .001 등이 붙을 수 있어 접두 매칭
+      if (m.name === 'TTail' || m.name.startsWith('TTail.')) {
         if (!tailMat) tailMat = m.clone();
         return tailMat;
       }
@@ -58,36 +57,28 @@ function buildFromTemplate(tplName, tints) {
   return { group: g, tailMat, blinkL, blinkR };
 }
 
-function makeSimpleCar(rng) {
+// 승용 2종: Sketchfab 실차(아이오닉5·쏘나타) — TBody 틴트로 색상 배리에이션
+function makeIoniq5(rng) {
   const color = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
   return {
-    ...buildFromTemplate('trafficSedan', { TBody: color }),
-    dims: { w: 2.0, l: 4.3, mass: 1000, slow: false },
+    ...buildFromTemplate('trafficIoniq5', { TBody: color, TBody2: color }),
+    dims: { w: 1.9, l: 4.64, mass: 1900, slow: false },
   };
 }
 
-function makeBoxTruck(rng) {
-  const cab = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
+function makeSonata(rng) {
+  const color = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
   return {
-    ...buildFromTemplate('trafficBoxTruck', { TBody: cab }),
-    dims: { w: 2.2, l: 6.4, mass: 3200, slow: true },
+    ...buildFromTemplate('trafficSonata', { TBody: color }),
+    dims: { w: 1.87, l: 4.86, mass: 1500, slow: false },
   };
 }
 
-function makeContainerTruck(rng) {
-  const cab = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
-  const cont = CONTAINER_COLORS[Math.floor(rng() * CONTAINER_COLORS.length)];
+// 고속버스(에어로 스페이스): 리버리 유지(틴트 없음), 트럭류 차로 규칙(slow) 적용
+function makeBus() {
   return {
-    ...buildFromTemplate('trafficContainer', { TBody: cab, TCont: cont }),
-    dims: { w: 2.4, l: 9.0, mass: 4500, slow: true },
-  };
-}
-
-function makeDumpTruck(rng) {
-  const cab = TRAFFIC_COLORS[Math.floor(rng() * TRAFFIC_COLORS.length)];
-  return {
-    ...buildFromTemplate('trafficDump', { TBody: cab }),
-    dims: { w: 2.4, l: 7.0, mass: 3800, slow: true },
+    ...buildFromTemplate('trafficBus', {}),
+    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true },
   };
 }
 
@@ -118,13 +109,12 @@ export class TrafficSystem {
     this.puppet = !!opts.puppet;
     const count = opts.count ?? 8;
     for (let i = 0; i < count; i++) {
-      // 차종 믹스: 승용차 위주 + 탑차/컨테이너/덤프트럭
+      // 차종 믹스: 승용차(실차 2종) 위주 + 고속버스 소수
       const roll = this.rng();
       let built;
-      if (roll < 0.60) built = makeSimpleCar(this.rng);
-      else if (roll < 0.75) built = makeBoxTruck(this.rng);
-      else if (roll < 0.88) built = makeContainerTruck(this.rng);
-      else built = makeDumpTruck(this.rng);
+      if (roll < 0.44) built = makeIoniq5(this.rng);
+      else if (roll < 0.88) built = makeSonata(this.rng);
+      else built = makeBus();
       const wrap = new THREE.Group();
       wrap.add(built.group);
       wrap.visible = false;
@@ -353,7 +343,7 @@ export class TrafficSystem {
         b.position.y += (n.y - b.position.y) * k;
         b.position.z += (n.z - b.position.z) * k;
         b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), n.yaw);
-        car.tailMat.emissiveIntensity = n.brake ? 4.2 : 1.3;
+        if (car.tailMat) car.tailMat.emissiveIntensity = n.brake ? 4.2 : 1.3;
         car.blinkPhase += dt;
         const on = n.blink !== 0 && (car.blinkPhase % 0.7) < 0.38;
         for (const m of car.blinkL) m.visible = n.blink > 0 && on;
@@ -490,7 +480,7 @@ export class TrafficSystem {
       }
       car.effSpeed += (cap - car.effSpeed) * Math.min(1, 3 * dt); // 부드럽게 가감속
       const braking = car.effSpeed < car.speed - 1.5;
-      car.tailMat.emissiveIntensity = braking ? 4.2 : 1.3;
+      if (car.tailMat) car.tailMat.emissiveIntensity = braking ? 4.2 : 1.3;
 
       car.s = Math.min(this.L - 6, car.s + car.effSpeed * dt);
 
