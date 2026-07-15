@@ -75,6 +75,20 @@ function makeBmw8() {
   };
 }
 
+function makeGClass() {
+  return {
+    ...buildFromTemplate('trafficGClass', {}),
+    dims: { w: 1.98, l: 4.87, mass: 2600, slow: false },
+  };
+}
+
+function makeDamas() {
+  return {
+    ...buildFromTemplate('trafficDamas', {}),
+    dims: { w: 1.4, l: 3.5, mass: 900, slow: false },
+  };
+}
+
 // 고속버스(에어로 스페이스): 리버리 유지(틴트 없음), 트럭류 차로 규칙(slow) 적용
 function makeBus() {
   return {
@@ -110,12 +124,14 @@ export class TrafficSystem {
     this.puppet = !!opts.puppet;
     const count = opts.count ?? 8;
     for (let i = 0; i < count; i++) {
-      // 차종 믹스: 승용차(실차 3종) 위주 + 고속버스 소수
+      // 차종 믹스: 실차 5종 균등 위주 + 고속버스 소수
       const roll = this.rng();
       let built;
-      if (roll < 0.30) built = makeIoniq5();
-      else if (roll < 0.60) built = makeSonata();
-      else if (roll < 0.88) built = makeBmw8();
+      if (roll < 0.22) built = makeIoniq5();
+      else if (roll < 0.44) built = makeSonata();
+      else if (roll < 0.62) built = makeBmw8();
+      else if (roll < 0.78) built = makeGClass();
+      else if (roll < 0.90) built = makeDamas();
       else built = makeBus();
       const wrap = new THREE.Group();
       wrap.add(built.group);
