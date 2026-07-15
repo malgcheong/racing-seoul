@@ -11,6 +11,8 @@ const FILES = {
   car4: '/assets/car4.glb',
   car5: '/assets/car5.glb',
   car6: '/assets/car6.glb',
+  // Sketchfab "Porsche 918 Spyder 2015" by 3D Cars Studio (CC-BY) — 크레딧 표기 필요
+  car7: '/assets/car7.glb',
   treeRound: '/assets/tree_round.glb',
   treePine: '/assets/tree_pine.glb',
   buildingA: '/assets/building_a.glb',
@@ -23,7 +25,10 @@ const FILES = {
   trafficBoxTruck: '/assets/traffic_boxtruck.glb',
   trafficContainer: '/assets/traffic_container.glb',
   trafficDump: '/assets/traffic_dump.glb',
-  cockpit: '/assets/cockpit.glb',
+  // Sketchfab "Car interior" by Gerhald (CC-BY) 기반 — 크레딧 표기 필요
+  cockpitSf: '/assets/cockpit_sf.glb',
+  // Sketchfab "Porsche 918 Spyder 2015" 실내 추출 (CC-BY) — 크레딧 표기 필요
+  cockpit918: '/assets/cockpit_918.glb',
 };
 
 const cache = {};
@@ -69,7 +74,7 @@ export function loadGameAssets(onProgress) {
             if (wheel) recenterPivot(wheel);
           }
         }
-        if (name === 'cockpit') {
+        if (name.startsWith('cockpit')) {
           // 콕핏 핸들: 런타임에서 조향 회전하므로 허브 피벗 복원 필요
           const w = gltf.scene.getObjectByName('WheelSpin');
           if (w) recenterPivot(w);

@@ -1,4 +1,5 @@
-// 게임 루프: 씬 구성, 주행, 랩/점수, 추억 근접 팝업
+// 게임 본체: 씬 구성(트랙·분기·환경·차량), 주행 루프, 진행률/결과, 멀티플레이.
+// 하늘 연출은 sky.js, 사운드는 sounds.js, AI 트래픽은 traffic.js로 분리.
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -6,10 +7,15 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { generateTrack, buildRoadMesh, buildStartLine, straightenTrackWindow, MEDIAN_HALF } from '../map/trackGenerator.js';
+import { generateTrack, buildRoadMesh, buildMedian, buildStartLine, straightenTrackWindow, MEDIAN_HALF } from '../map/trackGenerator.js';
 import { generateBranchRoute, buildBranchRoad } from '../map/branchRoad.js';
+import { buildRoadArrows } from '../map/roadArrows.js';
 import { TrafficSystem } from './traffic.js';
+import { NetClient } from '../net/client.js';
+import { RemoteCar } from './remoteCar.js';
+import { Minimap } from './minimap.js';
 import { ParticleSystem } from './particles.js';
+import { Rain } from './rain.js';
 import { buildEnvironment } from '../map/decorations.js';
 import { buildRestArea } from '../map/restArea.js';
 import { Car } from './car.js';
@@ -17,179 +23,10 @@ import { buildCockpit } from './cockpit.js';
 import { createWorld, clampToRoad } from './physics.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
+import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds } from './sky.js';
 
 const BASE_FOV = 68;
 const MAX_SPEED_ABS = 36;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
-
-// 별 필드: 상반구에 랜덤 분포, 밝기·색온도(푸름/노람) 배리에이션
-function makeStars(count = 900) {
-  const positions = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-  const R = 4000; // 산맥 링(루트 스케일)보다 바깥
-  const warm = new THREE.Color(0xfff2d0);
-  const cool = new THREE.Color(0xcfd8ff);
-  for (let i = 0; i < count; i++) {
-    const azimuth = Math.random() * Math.PI * 2;
-    const y = 0.04 + Math.pow(Math.random(), 0.7) * 0.96; // 위쪽에 살짝 더 밀집
-    const r = Math.sqrt(1 - y * y);
-    positions[i * 3] = Math.cos(azimuth) * r * R;
-    positions[i * 3 + 1] = y * R;
-    positions[i * 3 + 2] = Math.sin(azimuth) * r * R;
-    const tint = warm.clone().lerp(cool, Math.random());
-    const brightness = 0.25 + Math.pow(Math.random(), 2.2) * 0.75; // 대부분 흐리고 일부만 밝게
-    colors[i * 3] = tint.r * brightness;
-    colors[i * 3 + 1] = tint.g * brightness;
-    colors[i * 3 + 2] = tint.b * brightness;
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-  // 부드러운 원형 점 텍스처
-  const canvas = document.createElement('canvas');
-  canvas.width = 32;
-  canvas.height = 32;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-  g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.4, 'rgba(255,255,255,0.5)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 32, 32);
-
-  const mat = new THREE.PointsMaterial({
-    size: 2.4,
-    sizeAttenuation: false, // 픽셀 고정 크기 (거리 무관)
-    map: new THREE.CanvasTexture(canvas),
-    vertexColors: true,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    fog: false, // 안개 거리(800) 밖이므로 필수
-  });
-  const stars = new THREE.Points(geo, mat);
-  stars.frustumCulled = false;
-  return stars;
-}
-
-// 달: 크레이터 텍스처 원판 + 은은한 달무리. 방향광과 같은 방향에 배치해
-// 그림자가 달에서 오는 것처럼 보이게 한다.
-function makeMoon(dir) {
-  const group = new THREE.Group();
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 128;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#f4efdf';
-  ctx.beginPath();
-  ctx.arc(64, 64, 62, 0, Math.PI * 2);
-  ctx.fill();
-  // 크레이터 얼룩
-  for (const [x, y, r, a] of [
-    [45, 42, 14, 0.16], [82, 58, 10, 0.13], [58, 85, 16, 0.14],
-    [90, 88, 8, 0.11], [36, 70, 8, 0.1], [70, 30, 7, 0.12],
-  ]) {
-    ctx.fillStyle = `rgba(150,145,135,${a})`;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const moonTex = new THREE.CanvasTexture(canvas);
-
-  const disc = new THREE.Mesh(
-    new THREE.PlaneGeometry(150, 150),
-    new THREE.MeshBasicMaterial({ map: moonTex, transparent: true, fog: false })
-  );
-  group.add(disc);
-
-  // 달무리 (halo): 은은한 냉백색, 달을 중심으로
-  const haloCanvas = document.createElement('canvas');
-  haloCanvas.width = 128;
-  haloCanvas.height = 128;
-  const hctx = haloCanvas.getContext('2d');
-  const hg = hctx.createRadialGradient(64, 64, 24, 64, 64, 64);
-  hg.addColorStop(0, 'rgba(220,228,245,0.28)');
-  hg.addColorStop(0.45, 'rgba(190,205,240,0.08)');
-  hg.addColorStop(1, 'rgba(180,200,240,0)');
-  hctx.fillStyle = hg;
-  hctx.fillRect(0, 0, 128, 128);
-  const halo = new THREE.Mesh(
-    new THREE.PlaneGeometry(340, 340),
-    new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(haloCanvas),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      fog: false,
-    })
-  );
-  halo.position.z = -1;
-  group.add(halo);
-
-  group.position.copy(dir).multiplyScalar(3800);
-  group.lookAt(0, 0, 0);
-  group.scale.setScalar(2.7); // 멀어진 만큼 크기 보정(각크기 유지)
-  return group;
-}
-
-// 밤하늘 생명감: 천천히 가로지르는 비행기(점멸등) + 가끔 떨어지는 유성.
-// skyDome(카메라 추종 그룹)에 넣어 무한히 먼 하늘처럼 보이게 한다.
-function makeSkyLife() {
-  const group = new THREE.Group();
-
-  // 비행기: 좌현 빨강 / 우현 초록 / 흰 스트로브 점 3개
-  const plane = new THREE.Group();
-  const dotG = new THREE.SphereGeometry(1.5, 6, 4);
-  const red = new THREE.Mesh(dotG, new THREE.MeshBasicMaterial({ color: 0xff4040, fog: false }));
-  red.position.x = -5;
-  const green = new THREE.Mesh(dotG, new THREE.MeshBasicMaterial({ color: 0x3aff6a, fog: false }));
-  green.position.x = 5;
-  const strobe = new THREE.Mesh(new THREE.SphereGeometry(2.0, 6, 4),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }));
-  plane.add(red, green, strobe);
-  group.add(plane);
-  const A = new THREE.Vector3(-950, 330, -520);
-  const B = new THREE.Vector3(950, 380, 430);
-
-  // 유성: 가늘고 긴 additive 스트릭이 잠깐 떨어졌다 사라짐
-  const meteorMat = new THREE.MeshBasicMaterial({
-    color: 0xcfe4ff, transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
-  });
-  const meteor = new THREE.Mesh(new THREE.PlaneGeometry(50, 1.2), meteorMat);
-  group.add(meteor);
-  let meteorNext = 14;
-  let meteorT = -1;
-
-  function update(t, dt) {
-    // 비행기 왕복 순환 (편도 ~95초)
-    const T = 95;
-    const k = (t % T) / T;
-    plane.position.lerpVectors(A, B, k);
-    strobe.visible = (t % 1.3) < 0.09; // 스트로브 번쩍
-    // 유성 스폰/애니메이션
-    meteorNext -= dt;
-    if (meteorNext <= 0 && meteorT < 0) {
-      meteorT = 0;
-      meteorNext = 18 + Math.random() * 26;
-      meteor.position.set((Math.random() - 0.5) * 1300, 430 + Math.random() * 170, -650);
-      meteor.lookAt(0, meteor.position.y * 0.4, 0); // 대략 카메라 쪽을 향한 판
-      meteor.rotateZ(-0.62);                        // 떨어지는 기울기
-    }
-    if (meteorT >= 0) {
-      meteorT += dt;
-      const p = meteorT / 0.9;
-      if (p >= 1) { meteorT = -1; meteorMat.opacity = 0; }
-      else {
-        meteor.position.x += dt * 300;
-        meteor.position.y -= dt * 210;
-        meteorMat.opacity = (p < 0.25 ? p / 0.25 : 1 - (p - 0.25) / 0.75) * 0.85;
-      }
-    }
-  }
-  return { group, update };
-}
 
 // 화면 가장자리를 살짝 어둡게 (비네트)
 const VignetteShader = {
@@ -217,167 +54,60 @@ const VignetteShader = {
   `,
 };
 
-function makeSky(palette, radius = 1600, sunDir = null) {
-  const geo = new THREE.SphereGeometry(radius, 24, 16);
-  const azim = sunDir
-    ? new THREE.Vector3(sunDir.x, 0, sunDir.z).normalize()
-    : new THREE.Vector3(0, 0, 1);
-  const mat = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    uniforms: {
-      topColor: { value: new THREE.Color(palette.skyTop) },
-      bottomColor: { value: new THREE.Color(palette.skyHorizon) },
-      glowColor: { value: new THREE.Color(palette.sunGlow ?? 0x000000) },
-      sunAzim: { value: azim },
-      // 노을: 태양 방위 지평선이 달궈진다 (밤엔 0 → 기존과 동일)
-      glowStrength: { value: palette.tod === 'dusk' ? 1.0 : 0.0 },
-    },
-    vertexShader: `
-      varying vec3 vPos;
-      void main() {
-        vPos = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 topColor;
-      uniform vec3 bottomColor;
-      uniform vec3 glowColor;
-      uniform vec3 sunAzim;
-      uniform float glowStrength;
-      varying vec3 vPos;
-      void main() {
-        vec3 dir = normalize(vPos);
-        float h = dir.y * 0.5 + 0.5;
-        vec3 col = mix(bottomColor, topColor, pow(h, 0.8));
-        if (glowStrength > 0.0) {
-          float facing = max(dot(normalize(vec3(dir.x, 0.0, dir.z)), sunAzim), 0.0);
-          float low = pow(1.0 - clamp(dir.y, 0.0, 1.0), 3.0);
-          col += glowColor * pow(facing, 2.4) * low * glowStrength;
-        }
-        gl_FragColor = vec4(col, 1.0);
-      }
-    `,
-  });
-  return new THREE.Mesh(geo, mat);
-}
-
-// 노을 태양: 지평선 근처의 큰 주황 원반 + 넓은 웜 헤일로
-function makeDuskSun(dir) {
-  const group = new THREE.Group();
-  const mk = (size, draw) => {
-    const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
-    draw(c.getContext('2d'));
-    return new THREE.Mesh(
-      new THREE.PlaneGeometry(size, size),
-      new THREE.MeshBasicMaterial({
-        map: new THREE.CanvasTexture(c), transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
-      }));
-  };
-  const disc = mk(240, (ctx) => {
-    const g = ctx.createRadialGradient(64, 64, 8, 64, 64, 58);
-    g.addColorStop(0, 'rgba(255,236,190,1)');
-    g.addColorStop(0.55, 'rgba(255,166,80,0.95)');
-    g.addColorStop(1, 'rgba(255,120,50,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 128, 128);
-  });
-  const halo = mk(950, (ctx) => {
-    const g = ctx.createRadialGradient(64, 64, 6, 64, 64, 64);
-    g.addColorStop(0, 'rgba(255,160,80,0.34)');
-    g.addColorStop(0.5, 'rgba(255,130,70,0.1)');
-    g.addColorStop(1, 'rgba(255,110,60,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 128, 128);
-  });
-  halo.position.z = -1;
-  group.add(disc, halo);
-  group.position.copy(dir).multiplyScalar(3800);
-  group.lookAt(0, 0, 0);
-  group.scale.setScalar(2.7);
-  return group;
-}
-
-// 노을 구름: 태양 쪽 하늘에 깔린 길쭉한 구름 띠 — 밑면이 주황으로 달궈짐
-function makeDuskClouds(rng, sunDir) {
-  const group = new THREE.Group();
-  const tex = (() => {
-    const c = document.createElement('canvas');
-    c.width = 256;
-    c.height = 64;
-    const ctx = c.getContext('2d');
-    for (let i = 0; i < 26; i++) { // 겹친 타원 블롭 → 길쭉한 구름
-      const x = 20 + Math.random() * 216;
-      const y = 22 + Math.random() * 22;
-      const r = 14 + Math.random() * 26;
-      const g = ctx.createRadialGradient(x, y, 1, x, y, r);
-      const warm = y > 34; // 아랫면일수록 주황
-      g.addColorStop(0, warm ? 'rgba(255,150,95,0.34)' : 'rgba(212,180,205,0.30)');
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.ellipse(x, y, r * 1.7, r * 0.55, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    return new THREE.CanvasTexture(c);
-  })();
-  const azim = Math.atan2(sunDir.x, sunDir.z);
-  for (let k = 0; k < 9; k++) {
-    const a = azim + (rng() - 0.5) * 2.4;         // 태양 방위 주변에 몰림
-    const el = 0.06 + rng() * 0.2;                // 낮은 고도각
-    const R = 3500;
-    const m = new THREE.Mesh(
-      new THREE.PlaneGeometry(700 + rng() * 700, 90 + rng() * 110),
-      new THREE.MeshBasicMaterial({
-        map: tex, transparent: true, depthWrite: false, fog: false,
-        opacity: 0.5 + rng() * 0.4,
-      }));
-    m.position.set(Math.sin(a) * R * Math.cos(el), Math.sin(el) * R, Math.cos(a) * R * Math.cos(el));
-    m.lookAt(0, m.position.y * 0.5, 0);
-    group.add(m);
-  }
-  return group;
-}
-
 export class Game {
   // palette: nightCityPalette 결과
   constructor(container, palette, ui, opts = {}) {
     this.container = container;
     this.palette = palette;
-    this.ui = ui; // { onHud, onLap, onFinish, onCountdown, onBoost }
+    // ui 콜백: { onHud, onCountdown, onFinish, onFail, onStandings, onRematch, onRematchGo }
+    this.ui = ui;
     this.carModel = opts.carModel || 'car2'; // 선택된 차량 에셋 이름
+    // URL 파라미터 스냅샷 — 게임 생성 시점 기준으로 한 번만 파싱해 전역에서 재사용
+    // (개발·검증 파라미터 목록은 README 격인 메모리/주석 참고: seed·at·branch·rest·
+    //  cam·tod·wx·hard·traffic·dpr·stats·top·autodrive·tclose·room·host·name)
+    const gq = this.params = new URLSearchParams(location.search);
+    // 게임 설정(시작화면 토글 → opts, URL 파라미터가 있으면 우선: ?hard=0 ?traffic=0)
+    this.hardMode = gq.get('hard') !== null ? gq.get('hard') !== '0' : (opts.hardMode ?? true);
+    this.trafficOn = gq.get('traffic') !== null ? gq.get('traffic') !== '0' : (opts.traffic ?? true);
 
     this.running = false;
     this.disposed = false;
-    this.input = { forward: false, backward: false, left: false, right: false, drift: false };
+    this.input = { forward: false, backward: false, left: false, right: false, drift: false, highBeam: false };
     this.clock = new THREE.Clock();
 
     this.raceTime = 0;
     this.totalDist = 0;   // 주행 거리(전진분) — 평균속도 산출용
     this.maxSpeed = 0;    // 최고 속도(km/h) — 결과 화면용
     this.finished = false;
+    this.rematch = opts.rematch || null; // { net, ids, host } — 직전 판 소켓 인계
   }
 
   build(seed) {
     const rng = createRng(seed);
 
     // 렌더러/씬
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
     // 성능: 고DPI에서 픽셀 수가 제곱으로 늘어 포스트프로세싱 비용이 커짐 → 1.5로 캡
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // (?dpr=1 로 더 낮춰 테스트 가능)
+    const dprParam = parseFloat(this.params.get('dpr'));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, Number.isFinite(dprParam) ? dprParam : 1.5));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap; // Soft 대비 저렴(야간이라 차이 미미)
+    // 그림자 깊이 패스는 씬 전체를 한 번 더 그린다 — 격프레임 갱신으로 절반 절약.
+    // (태양이 차를 따라가며 미세 이동하는 정도라 한 프레임 지연은 티가 안 남)
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.95;
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    // 야간: 안개(원경 깊이감). 배경 산맥까지 바닥이 이어지고 산은 헤이즈에 녹아들도록
-    this.scene.fog = new THREE.Fog(this.palette.fog, 220, 2800);
+    // 야간: 안개(원경 깊이감). 배경 산맥까지 바닥이 이어지고 산은 헤이즈에 녹아들도록.
+    // 비 오는 밤은 헤이즈가 짙다
+    this.scene.fog = this.palette.rain
+      ? new THREE.Fog(this.palette.fog, 150, 2100)
+      : new THREE.Fog(this.palette.fog, 220, 2800);
 
     this.camera = new THREE.PerspectiveCamera(
       BASE_FOV,
@@ -424,12 +154,14 @@ export class Game {
       this.skyDome.add(dimStars);
       this.skyDome.add(makeDuskSun(this.sunDir));
       this.skyDome.add(makeDuskClouds(rng, this.sunDir));
-    } else {
+    } else if (!this.palette.rain) {
       this.skyDome.add(makeStars());
       this.skyDome.add(makeMoon(this.sunDir));
+    } // 비 오는 밤: 흐린 하늘 — 별·달 없음
+    if (!this.palette.rain) {
+      this.skyLife = makeSkyLife(); // 비행기 점멸등 + 유성
+      this.skyDome.add(this.skyLife.group);
     }
-    this.skyLife = makeSkyLife(); // 비행기 점멸등 + 유성
-    this.skyDome.add(this.skyLife.group);
     this.scene.add(this.skyDome);
 
     // 하늘을 환경맵으로 구워 젖은 노면·차체에 은은한 시트(sheen) 반사
@@ -457,6 +189,7 @@ export class Game {
     this.composer.addPass(new OutputPass());
 
     this.particles = new ParticleSystem(this.scene);
+    this.rain = this.palette.rain ? new Rain(this.scene) : null;
 
     // 트랙 + 장식 + 추억 오브젝트 (편도 루트: 출발 → 강 다리 → 목적지)
     const track = generateTrack(rng);
@@ -464,9 +197,10 @@ export class Game {
     this.trackWidth = track.width;
     this.river = track.river;
     // 도로 메시는 쉼터 구간 직선화(아래) 이후에 생성한다
-    // 우측 통행: 주행 가능한 측면 범위(중앙선 ~ 우측 배리어), lateral<0이 우측.
-    // 중앙분리대는 제거됐지만 플레이어는 우측 차로에, 대향차는 좌측 차로에 유지.
-    this.laneMin = MEDIAN_HALF + 1.4;               // 중앙에서 최소 이격
+    // 우측 통행: 주행 가능한 측면 범위(중앙분리대 ~ 우측 배리어).
+    // 왕복 8차선 — 플레이어·AI 트래픽은 우측 4차선, 좌측 4차선은 장식 대향 차량.
+    // 차 반폭(~1.1)+여유 — 1차로 중심(lat 2.0)에 정상적으로 올라탈 수 있어야 한다
+    this.laneMin = MEDIAN_HALF + 1.15;              // = 1.65, 분리대 연석에 안 닿는 한계
     this.laneMax = track.width / 2 - 1.2;           // 우측 갓길 직전
     this.laneCenter = (this.laneMin + this.laneMax) / 2;
     // 졸음쉼터 위치: 루트 20~60% 중 가장 직선이면서 다리(강) 위가 아닌 구간.
@@ -507,7 +241,14 @@ export class Game {
     const roadMesh = buildRoadMesh(track.samples, track.width);
     // 노을: 물웅덩이(roughnessMap 매끈 패치)가 밝은 하늘을 그대로 비추면 과함
     if (dusk) roadMesh.material.envMapIntensity = 0.35;
+    // 비: 젖은 노면 — 매끈해져 가로등·네온이 길게 비친다 (밤 전용이라 과반사 없음)
+    if (this.palette.rain) {
+      roadMesh.material.roughness = 0.5;
+      roadMesh.material.envMapIntensity = 0.85;
+    }
     this.scene.add(roadMesh);
+    // 왕복 8차선: 중앙분리대(뉴저지 방호벽+LED)가 대향 차로와 주행 차로를 가른다
+    this.scene.add(buildMedian(track.samples));
     this.restIdx = restIdx;
     this.restOuter = 30;          // 졸음쉼터 구간에서 허용되는 우측 최대 이격(확장 플랫폼)
     this.restSpan = spanBody;     // 본체 구간 인덱스 반경
@@ -515,28 +256,62 @@ export class Game {
     this.segLen = segLen;
 
     // 분기 루트: 다리 직후 우측 진출 → 루프 하강 → 강변도로 크루즈 → 본선 재합류
-    this.branch = generateBranchRoute(track.samples, track.river);
+    this.branch = generateBranchRoute(track.samples, track.river, track.width);
     this.onBranch = false;
     this.branchIdx = 0;
+    // 진출차로 판정용: 본선 가장자리 lat(이 선을 넘어야 분기 진입으로 본다)
+    this.branchEdgeLat = track.width / 2 - 0.25;
+    this.branchWinN = this.branch ? Math.round(this.branch.approachLen / segLen) + 3 : 0;
     // push: 쉼터 구간은 건물을 없애지 않고 플랫폼(중심선 기준 ~32.5m) 뒤로 물려 세운다
     const gaps = [{ side: 1, idx: restIdx, halfSpan: spanRamp + 3, parapetSpan: spanRamp, push: 37 }];
     let branchCoarse = null;
+    let branchGroup = null;
     if (this.branch) {
-      this.scene.add(buildBranchRoad(this.branch, track.samples, track.width));
-      // 올림픽대로 종점 = 대체 결승선 (분기는 재합류 없이 쭉 간다)
-      this.scene.add(buildStartLine(this.branch.samples, this.branch.width,
+      branchGroup = buildBranchRoad(this.branch, track.samples, track.width, track.river);
+      this.scene.add(branchGroup);
+      // 올림픽대로 종점 = 대체 결승선 — 합류 후엔 강변도로 남행 반부만 달리므로 그 폭으로
+      this.scene.add(buildStartLine(this.branch.samples, 7.2,
         this.branch.samples.length - 30));
       branchCoarse = this.branch.samples.filter((_, i) => i % 3 === 0).map((s) => s.pos);
-      // 진출부: 갈라지는 ~60m 파라펫·스커트 개방
+      // 진출부: 진출차로(테이퍼 시작)부터 램프가 파라펫 라인을 벗어나는 지점까지만
+      // 파라펫 개방 — 길게 열어두면 고어 뒤 데크 가장자리가 "벽 없는 낭떠러지"로 보인다
       gaps.push({
-        side: 1, idx: this.branch.exitIdx + Math.round(25 / segLen),
-        halfSpan: Math.round(48 / segLen), parapetSpan: Math.round(32 / segLen),
+        side: 1, idx: this.branch.exitIdx - Math.round(41 / segLen),
+        halfSpan: Math.round(93 / segLen), parapetSpan: Math.round(69 / segLen),
       });
     }
+    // 발광 노면 화살표: 출발 직후·다리 서단 이후 주행 4개 차로 직진 유도 +
+    // 분기 진출차로(테이퍼 완료~고어)엔 우측 굽음 화살표 3개
+    {
+      const spots = [];
+      const laneLats = [0.5, 1.5, 2.5, 3.5].map((k) => (track.width / 8) * k);
+      const straightAt = [this.startIdx + Math.round(130 / segLen)];
+      for (let i = 0; i < nS; i++) {
+        if (track.samples[i].pos.x < track.river.x0 - 140) { straightAt.push(i); break; }
+      }
+      for (const ai of straightAt) {
+        if (ai < 4 || ai > nS - 30) continue;
+        for (const lat of laneLats) spots.push({ i: ai, lat, bend: 0 });
+      }
+      if (this.branch) {
+        const latX = this.branchEdgeLat + this.branch.laneW / 2 - 0.2;
+        for (const back of [60, 35, 12]) {
+          spots.push({ i: this.branch.exitIdx - Math.round(back / segLen), lat: latX, bend: 1 });
+        }
+      }
+      this.scene.add(buildRoadArrows(track.samples, spots));
+    }
+    // 코스 미니맵 (HUD 오버레이 — 본선·분기·강·플레이어/상대 점)
+    const hudEl = document.querySelector('#hud');
+    if (hudEl) this.minimap = new Minimap(hudEl, track.samples, this.branch, track.river);
+
     const env = buildEnvironment(this.scene, rng, track.samples, this.palette, track.width,
       gaps, track.river, branchCoarse);
     buildRestArea(this.scene, track.samples, restIdx); // 졸음쉼터(우측 장식)
-    this.lampHeads = env.lampHeads;
+    // 분기 가로등 헤드도 실광원 풀에 합류 — 분기 주행 중에도 노면이 밝게 따라온다
+    this.lampHeads = branchGroup?.userData.lampHeads.length
+      ? env.lampHeads.concat(branchGroup.userData.lampHeads)
+      : env.lampHeads;
     this.envUpdate = env.update;   // 환경 애니메이션(전광판·점멸등) 훅
     this.worldTime = 0;            // 레이스와 무관하게 항상 흐르는 시계
     // 실제 광원은 3개만 풀링: 매 프레임 차에서 가장 가까운 가로등 3개로 이동
@@ -559,31 +334,68 @@ export class Game {
     this.car.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     this.car.placeAt(startPos, heading);
     this.scene.add(this.car.group);
-    // 시점: 3인칭 추격(기본) ↔ 1인칭 콕핏뷰. C 키 토글, ?cam=fp 로 시작 지정
-    this.cockpit = buildCockpit();
+    // 시점: 1인칭 콕핏뷰(기본) ↔ 3인칭 추격. C 키 토글, ?cam=chase 로 3인칭 시작
+    this.cockpit = buildCockpit(this.carModel);
     this.car.group.add(this.cockpit.group);
-    this.setView(new URLSearchParams(location.search).get('cam') === 'fp');
-    // 대향차와 충돌 시 스파크/셰이크(밀림은 엔진이 처리)
+    this.setView(this.params.get('cam') !== 'chase');
+    // 차량 충돌: 임팩트 효과음(트래픽·원격 플레이어 공통, 쿨다운) + 하드모드 사고 판정
     this.car.body.addEventListener('collide', (e) => {
+      const rel = e.contact ? Math.abs(e.contact.getImpactVelocityAlongNormal()) : 8;
+      const now = performance.now();
+      if (rel > 2 && (!this._impactCd || now - this._impactCd > 250)) {
+        this._impactCd = now;
+        sounds.impact(Math.min(1, rel / 14));
+      }
       if (e.body && e.body.__traffic) this.onCarCollide(e);
     });
 
-    // 야간 헤드라이트 (차와 함께 이동하는 스포트라이트)
+    // 야간 헤드라이트 (차와 함께 이동하는 스포트라이트) — F키 상향등 시 증폭
     const headlight = new THREE.SpotLight(0xffedc4, 1000, 85, 0.44, 0.5, 1.7);
     headlight.position.set(0, 2.0, 1.5);
     headlight.target.position.set(0, -1.5, 32);
     this.car.group.add(headlight, headlight.target);
+    this.headlight = headlight;
+    this.headlightBase = { intensity: 1000, distance: 85, angle: 0.44 };
 
-    // 대향 차량: 맞은편(좌측, -lateral) 차선에서 플레이어 쪽으로 랜덤하게 달려옴
-    // 일방통행 4차선: 폭/4 기준 4개 차선 중심(모두 같은 방향)
-    const laneW = track.width / 4;
-    this.traffic = new TrafficSystem(this.scene, this.samples, {
+    // AI 트래픽(같은 방향): 왕복 8차선의 우측 4차선(플레이어 반부)만 사용.
+    // 좌측 4차선의 대향 차량은 buildEnvironment의 장식 인스턴스가 담당(물리 없음 —
+    // 중앙분리대 클램프로 플레이어가 접촉할 수 없다).
+    // 멀티(?room=CODE[&host=1]): 서버는 중계만, 각 클라가 자기 물리 시뮬.
+    // 트래픽은 방장 클라가 시뮬해 중계 → 게스트는 퍼펫(재생) 모드
+    const mq = this.params;
+    this.mpRoom = mq.get('room');
+    this.mpHost = mq.get('host') === '1';
+    // 재대결: 기존 소켓·방을 그대로 물려받는다 (재접속하면 방장 승계가 연쇄로 꼬임).
+    // host는 URL이 아니라 승계까지 반영된 직전 게임의 최종 상태를 따른다
+    if (this.rematch) {
+      this.mpHost = !!this.rematch.host;
+      this.mpIds = this.rematch.ids || [];
+    }
+    this.mpName = (mq.get('name') || '').slice(0, 8) || (this.mpHost ? '방장' : '상대');
+    this.mpPeers = this.rematch ? Math.max(0, (this.rematch.ids || []).length - 1) : 0;
+    this.mpStartAt = 0;
+    this.remotes = new Map(); // peerId -> RemoteCar
+
+    const laneW = track.width / 8; // 차선폭 4m
+    this.traffic = !this.trafficOn ? null : new TrafficSystem(this.scene, this.samples, {
       world: this.world,
-      laneCenters: [-laneW * 1.5, -laneW * 0.5, laneW * 0.5, laneW * 1.5], // -8.25,-2.75,+2.75,+8.25
+      laneCenters: [laneW * 0.5, laneW * 1.5, laneW * 2.5, laneW * 3.5], // +2,+6,+10,+14
       count: 16,
       river: track.river, // 다리 구간 정체(구간별 밀도감)용
-      debugClose: new URLSearchParams(location.search).get('tclose') === '1',
+      debugClose: this.params.get('tclose') === '1',
+      puppet: !!this.mpRoom && !this.mpHost, // 게스트: 방장 스냅샷 재생
     });
+    // 멀티: 원격 헤드라이트 슬롯 프리워밍 — 레이스 중 광원 수가 늘면
+    // 모든 재질 셰이더가 재컴파일되며 크게 버벅인다(60fps 튜닝의 핵심)
+    this.mpLightPool = [];
+    if (this.mpRoom) {
+      for (let i = 0; i < 3; i++) {
+        const L = new THREE.SpotLight(0xffedc4, 0, 70, 0.4, 0.5, 1.7);
+        this.scene.add(L, L.target);
+        this.mpLightPool.push(L);
+      }
+    }
+    if (this.mpRoom) this.setupNet();
     this.crashShake = 0;
     // 니어미스 칼치기 → 부스터 게이지 충전(점수 없음)
     this.boostGauge = 0;   // 0~1, 차면 부스터 발동
@@ -592,7 +404,7 @@ export class Game {
     this.currentSampleIdx = 0;
 
     // 개발·검증: ?rest=1 → 졸음쉼터 직전에서 시작
-    if (new URLSearchParams(location.search).get('rest') === '1') {
+    if (this.params.get('rest') === '1') {
       const ri = Math.max(0, restIdx - Math.round(40 / segLen));
       const rs = track.samples[ri];
       this.currentSampleIdx = ri;
@@ -602,9 +414,9 @@ export class Game {
       );
     }
     // 개발·검증: ?branch=1 → 분기 진출점 직전에서 시작 / ?branch=N(≥2) → 분기 샘플 N에서 시작
-    const branchParam = new URLSearchParams(location.search).get('branch');
+    const branchParam = this.params.get('branch');
     if (this.branch && branchParam === '1') {
-      const bi = Math.max(0, this.branch.exitIdx - Math.round(70 / segLen));
+      const bi = Math.max(0, this.branch.exitIdx - Math.round(160 / segLen)); // 테이퍼 시작 전
       const bsmp = track.samples[bi];
       this.currentSampleIdx = bi;
       this.car.placeAt(
@@ -620,7 +432,7 @@ export class Game {
       this.car.placeAt(bsmp.pos.clone(), Math.atan2(bsmp.tangent.x, bsmp.tangent.z));
     }
     // 개발·검증: ?at=0.45 → 루트의 해당 지점에서 시작 (다리 등 특정 구간 확인용)
-    const atParam = parseFloat(new URLSearchParams(location.search).get('at'));
+    const atParam = parseFloat(this.params.get('at'));
     if (!Number.isNaN(atParam)) {
       const ai = Math.max(0, Math.min(nS - 2, Math.floor(nS * atParam)));
       const asmp = track.samples[ai];
@@ -633,7 +445,7 @@ export class Game {
 
     // 개발용 렌더 통계 (?stats=1): 드로우콜/삼각형 수를 좌상단 힌트에 표시
     // 컴포저가 패스마다 info를 리셋하므로 수동 리셋으로 프레임 전체를 집계
-    this.showStats = new URLSearchParams(location.search).get('stats') === '1';
+    this.showStats = this.params.get('stats') === '1';
     if (this.showStats) this.renderer.info.autoReset = false;
 
     this.bindInput();
@@ -662,6 +474,7 @@ export class Game {
         case 'ArrowLeft': case 'KeyA': this.input.left = down; break;
         case 'ArrowRight': case 'KeyD': this.input.right = down; break;
         case 'ShiftLeft': case 'ShiftRight': this.input.drift = down; break;
+        case 'KeyF': this.input.highBeam = down; break; // 상향등(누르는 동안) — 앞차 양보 요구
         case 'KeyC': if (down && !e.repeat) this.setView(!this.fpView); break;
         default: return;
       }
@@ -671,6 +484,276 @@ export class Game {
     this.keyup = (e) => this.onKey(e, false);
     window.addEventListener('keydown', this.keydown);
     window.addEventListener('keyup', this.keyup);
+  }
+
+  // ── 멀티플레이: relay 이벤트 배선 ──
+  setupNet() {
+    // 재대결이면 직전 판의 소켓을 그대로 사용 — 방 나갔다 재입장하면
+    // 서버 방장 승계·고스트 피어 레이스가 생긴다. 핸들러만 새로 덮어쓴다.
+    if (this.rematch) {
+      this.net = this.rematch.net;
+    } else {
+      this.net = new NetClient(`ws://${location.hostname}:8787`);
+      this.net.join(this.mpRoom);
+    }
+    this.rmSet = new Set();  // 재대결 준비 완료한 피어 id
+    this.rmSelf = false;
+    this.net.on('peers', (m) => {
+      this.mpPeers = Math.max(0, m.n - 1);
+      this.mpIds = m.ids || []; // 방 로스터 — 출발 그리드 슬롯 결정용
+    });
+    this.net.on('left', (m) => {
+      const r = this.remotes.get(m.id);
+      if (r) {
+        r.dispose();
+        if (r.head) this.mpLightPool.push(r.head); // 광원 풀 반환
+        this.remotes.delete(m.id);
+      }
+      this._rrLeft?.(m.id);      // 재대결 대기 중 퇴장 — 기다릴 대상에서 제외
+      this.checkRematch();       // 남은 전원이 이미 준비 상태일 수 있다
+      this._standingsDirty = true;
+    });
+    // 방장 지정/승계: 서버가 첫 입장자를 방장으로, 방장 퇴장 시 다음 피어를 지정.
+    // 내가 새 방장이 되면 퍼펫 트래픽을 실제 AI 시뮬로 승격해 이어받는다
+    this.net.on('host', (m) => {
+      this.mpHostId = m.id;
+      if (m.id !== this.net.id && this.mpHost) {
+        // 서버 지정 방장이 따로 있음(내가 나중에 입장한 케이스) — 시뮬 주체 양보
+        this.mpHost = false;
+        this.traffic?.demote();
+      }
+      if (m.id === this.net.id && !this.mpHost) {
+        this.mpHost = true;
+        this.traffic?.promote();
+        this.flash = { t: 3, label: '방장 승계', sub: '트래픽 시뮬을 이어받았습니다' };
+        // 레이스 시작 전에 방장이 나간 경우 — 새 방장이 시작 신호를 대신 쏜다
+        if (!this.mpStartAt && this._goResolve) {
+          this.mpStartAt = this.net.serverNow() + 4000;
+          const q = this.params;
+          this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
+          this._goResolve();
+        }
+      }
+    });
+    this.net.on('go', (m) => {
+      this.mpStartAt = m.at;
+      if (m.seed && String(m.seed) !== String(this.params.get('seed'))) {
+        console.warn('[mp] 시드 불일치 — 호스트가 준 링크(?seed=..&room=..)로 접속해야 같은 맵');
+      }
+      this._goResolve?.();
+    });
+    this.net.on('s', (m) => {
+      if (this.disposed) return; // 재대결 리빌드 중 구 게임 핸들러 잔류 방어
+      let r = this.remotes.get(m._from);
+      if (!r) {
+        r = new RemoteCar(this.scene, this.world, m.c || 'car2', this.mpLightPool.pop() || null);
+        this.remotes.set(m._from, r);
+      }
+      if (m.n) r.setName(m.n); // 이름표(최초 1회 생성)
+      r.progress = m.pr || 0;  // 순위 계산용
+      r.highBeam = !!m.b;      // 상향등 상태 → 원격 헤드라이트 증폭
+      r.push({ x: m.p[0], y: m.p[1], z: m.p[2], h: m.h, v: m.v });
+      if (this.finished) this._standingsDirty = true; // 결과 화면 순위표 라이브 갱신
+    });
+    this.net.on('tf', (m) => { if (!this.mpHost && this.traffic) this.traffic.applyNet(m.cars); });
+    this.net.on('fin', (m) => {
+      const r = this.remotes.get(m._from);
+      if (r) { r.progress = 1.001; r.finished = true; r.finishTime = m.time; } // 완주자는 항상 상위
+      const who = r?.name || '상대';
+      this.flash = { t: 3.5, label: `${who} 완주!`, sub: `기록 ${m.time.toFixed(1)}초` };
+      this._standingsDirty = true;
+    });
+    // 사고 리타이어 통지 — 순위표에 "사고 (진행률%)"로 남는다
+    this.net.on('crash', (m) => {
+      const r = this.remotes.get(m._from);
+      if (r) { r.crashed = true; r.progress = m.pr ?? r.progress; }
+      this.flash = { t: 3, label: `${r?.name || '상대'} 사고!`, sub: '리타이어' };
+      this._standingsDirty = true;
+    });
+    // 재대결 준비 신호(결과 화면에서 재대결 버튼 클릭) — 전원 모이면 같은 방·시드로 재시작
+    this.net.on('rm', (m) => {
+      this.rmSet.add(m._from);
+      this.checkRematch();
+    });
+  }
+
+  // ── 순위표: 완주자(기록순) → 미완주자(진행률순). 나+원격 전원 포함 ──
+  getStandings() {
+    const rows = [{
+      me: true,
+      name: this.mpName,
+      time: this.finishTime ?? null,
+      crashed: !!this.failed,
+      progress: this.lastProgress || 0,
+    }];
+    for (const r of this.remotes.values()) {
+      rows.push({
+        me: false,
+        name: r.name || '상대',
+        time: r.finishTime ?? null,
+        crashed: !!r.crashed,
+        progress: Math.min(r.progress || 0, 1),
+      });
+    }
+    rows.sort((a, b) => {
+      if (a.time !== null && b.time !== null) return a.time - b.time;
+      if (a.time !== null) return -1;
+      if (b.time !== null) return 1;
+      return b.progress - a.progress;
+    });
+    return rows;
+  }
+
+  // ── 재대결: 결과 화면에서 전원이 준비되면 소켓을 인계해 같은 방·시드로 재시작 ──
+  requestRematch() {
+    if (!this.net || this.rmSelf) return;
+    this.rmSelf = true;
+    this.net.send({ t: 'rm' });
+    this.checkRematch();
+  }
+
+  checkRematch() {
+    if (!this.net || !this.finished || this.netHandoff) return;
+    const roster = [...this.remotes.keys()];
+    const ready = this.rmSet
+      ? roster.filter((id) => this.rmSet.has(id)).length + (this.rmSelf ? 1 : 0)
+      : 0;
+    this.ui.onRematch?.({ ready, total: roster.length + 1 });
+    if (this.rmSelf && roster.every((id) => this.rmSet.has(id))) {
+      this.netHandoff = true; // dispose가 소켓을 닫지 않게 — 새 게임이 물려받는다
+      this.ui.onRematchGo?.({
+        net: this.net,
+        ids: [this.net.id, ...roster],
+        host: this.mpHost,
+      });
+    }
+  }
+
+  // 시작 동기화: 방장이 피어 입장을 기다렸다 서버시각 기준 GO 시점을 브로드캐스트.
+  // 양쪽 모두 (GO − 카운트다운 2400ms) 시점까지 대기 후 동시에 카운트다운 진입.
+  async mpAwaitStart() {
+    if (this.rematch) {
+      // ── 재대결 동기화: 각자 씬 리빌드 속도가 달라서, 준비된 클라가 'rr' 핑을
+      // 반복 송신 → 방장이 전원 확인 후 go. (리빌드 중 host 승계·go는 main.js가
+      // rematch 객체에 브릿지해 둔다 — 그 창에서 온 메시지는 구 게임 핸들러 몫이라)
+      this.mpHost = !!this.rematch.host;
+      if (this.rematch.goAt) this.mpStartAt = this.rematch.goAt;
+      this.ui.onCountdown('재대결 준비중…');
+      const need = new Set(this.mpIds.filter((id) => id !== this.net.id));
+      const got = new Set();
+      this.net.on('rr', (m) => got.add(m._from));
+      this._rrLeft = (id) => need.delete(id);
+      const ping = setInterval(() => { if (!this.mpStartAt) this.net.send({ t: 'rr' }); }, 400);
+      const t0 = performance.now();
+      const q = this.params;
+      if (this.mpHost && !this.mpStartAt) {
+        await new Promise((res) => {
+          const iv = setInterval(() => {
+            if (this.disposed || [...need].every((id) => got.has(id))
+              || performance.now() - t0 > 30000) { clearInterval(iv); res(); }
+          }, 120);
+        });
+        if (this.disposed) { clearInterval(ping); return; }
+        this.mpStartAt = this.net.serverNow() + 4000;
+        this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
+      } else if (!this.mpStartAt) {
+        await new Promise((res) => {
+          this._goResolve = res;
+          const iv = setInterval(() => {
+            if (this.disposed || this.mpStartAt) { clearInterval(iv); res(); }
+            // 방장이 리빌드 창에서 이탈한 극단 케이스 — 30초 후 스스로 출발 신호
+            else if (performance.now() - t0 > 30000) {
+              clearInterval(iv);
+              this.mpStartAt = this.net.serverNow() + 4000;
+              this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
+              res();
+            }
+          }, 120);
+        });
+      }
+      clearInterval(ping);
+      if (this.disposed) return;
+    } else if (this.mpHost) {
+      this.ui.onCountdown(`상대 대기중… 방 코드 ${this.mpRoom}`);
+      // 게스트가 로비에서 방을 발견→차량 선택→로딩까지 걸리는 시간 감안(90초 후 솔로 출발)
+      const t0 = performance.now();
+      await new Promise((res) => {
+        const iv = setInterval(() => {
+          if (this.mpPeers > 0 || performance.now() - t0 > 90000) { clearInterval(iv); res(); }
+        }, 150);
+      });
+      this.mpStartAt = this.net.serverNow() + 4000;
+      const q = this.params;
+      this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
+    } else {
+      this.ui.onCountdown('호스트 대기중…');
+      if (!this.mpStartAt) await new Promise((res) => { this._goResolve = res; });
+    }
+    // 출발 그리드: 로스터를 정렬해 슬롯을 결정적으로 분배 — 전원이 같은 지점에
+    // 겹쳐 스폰되지 않게 2열(좌/우 차로) × N행(8m 간격) 배치
+    const ids = [...new Set([this.net.id, ...(this.mpIds || [])])].sort();
+    const slot = Math.max(0, ids.indexOf(this.net.id));
+    const col = slot % 2;
+    const row = Math.floor(slot / 2);
+    const gi = Math.max(2, this.startIdx - Math.round((row * 8) / this.segLen));
+    const gs = this.samples[gi];
+    const lat = this.laneCenter + (col === 0 ? -2.6 : 2.6);
+    this.car.placeAt(
+      gs.pos.clone().addScaledVector(gs.left, lat),
+      Math.atan2(gs.tangent.x, gs.tangent.z));
+    this.currentSampleIdx = gi;
+    // 배치 직후 스냅샷 1회 선송신 — GO 순간부터 상대 차가 그리드에 보인다
+    const p0 = this.car.body.position;
+    this.net.send({
+      t: 's', p: [p0.x, p0.y, p0.z], h: this.car.heading, v: 0,
+      c: this.carModel, n: this.mpName, pr: 0,
+    });
+
+    const beginAt = this.mpStartAt - 2400;
+    await new Promise((res) => {
+      const iv = setInterval(() => {
+        if (this.net.serverNow() >= beginAt) { clearInterval(iv); res(); }
+      }, 25);
+    });
+  }
+
+  // 멀티 프레임 틱: 원격 차 보간 + 스냅샷 송신(~15Hz) + (방장) 트래픽 중계(~10Hz)
+  mpTick(dt) {
+    for (const r of this.remotes.values()) {
+      r.update();
+      // 원격 차에도 도로 경계 클램프 — 분리대는 물리 벽이 아니라 수학 클램프라
+      // 스프링 오버슈트/보간이 분리대 메시를 뚫고 보이는 현상을 여기서 막는다.
+      // (우측 한계는 진출차로·쉼터 확장 때문에 느슨하게 30)
+      const nr = this.nearestSampleOf(
+        this.samples, r._idx ?? this.currentSampleIdx, 200, r.body.position);
+      r._idx = nr.idx;
+      if (nr.dist < 40) {
+        clampToRoad(r.body, this.samples[nr.idx], this.laneMin, 30);
+        r.group.position.set(r.body.position.x, r.body.position.y, r.body.position.z);
+      }
+    }
+    this._mpAccS = (this._mpAccS || 0) + dt;
+    if (this._mpAccS >= 1 / 15) {
+      this._mpAccS = 0;
+      const p = this.car.body.position;
+      this.net.send({
+        t: 's',
+        p: [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100],
+        h: Math.round(this.car.heading * 1000) / 1000,
+        v: Math.round(this.car.speed * 10) / 10,
+        c: this.carModel,
+        n: this.mpName,
+        pr: Math.round((this.lastProgress || 0) * 1000) / 1000,
+        b: this.input.highBeam ? 1 : 0, // 상향등 — 상대 화면에서 광원 증폭
+      });
+    }
+    if (this.mpHost && this.traffic) {
+      this._mpAccT = (this._mpAccT || 0) + dt;
+      if (this._mpAccT >= 1 / 10) {
+        this._mpAccT = 0;
+        this.net.send({ t: 'tf', cars: this.traffic.getNet() });
+      }
+    }
   }
 
   async countdown() {
@@ -685,16 +768,19 @@ export class Game {
   }
 
   async start() {
+    if (this.mpRoom) await this.mpAwaitStart();
     await this.countdown();
     if (this.disposed) return;
     // 개발·검증용 자동 주행 (?autodrive=1)
-    if (new URLSearchParams(location.search).get('autodrive') === '1') {
+    if (this.params.get('autodrive') === '1') {
       this.input.forward = true;
       this.autoSteer = true;
     }
     this.running = true;
     this.clock.start();
     this.raceTime = 0;
+    document.querySelector('.controls-hint')?.classList.remove('faded'); // 새 판마다 리셋
+    sounds.engineStart(); // 엔진 루프(합성) — GO와 함께 시동
     this.loop();
   }
 
@@ -718,8 +804,8 @@ export class Game {
   }
 
   // 임의 샘플 배열에서 가장 가까운 인덱스 (수평 거리 — 분기는 고도가 달라짐)
-  nearestSampleOf(arr, guess, win) {
-    const p = this.car.body.position;
+  nearestSampleOf(arr, guess, win, pos = null) {
+    const p = pos || this.car.body.position;
     let bi = guess, bd = Infinity;
     const lo = Math.max(0, guess - win);
     const hi = Math.min(arr.length - 1, guess + win);
@@ -731,9 +817,10 @@ export class Game {
     return { idx: bi, dist: Math.sqrt(bd) };
   }
 
-  // 대향 차량과 충돌 → 즉시 게임 실패 (현실성: 사고 한 번이면 끝)
+  // 대향 차량과 충돌 → (하드모드) 즉시 게임 실패. 하드모드 off면 물리 충돌만
   onCarCollide(e) {
     if (this.finished) return;
+    if (!this.hardMode) return; // 이지모드: 부딪혀도 게임오버 없음(밀림·스파크만)
     const rel = e.contact ? Math.abs(e.contact.getImpactVelocityAlongNormal()) : 8;
     if (rel < 1.5) return; // 물리 솔버의 미세 접촉 노이즈만 무시
     this.fail();
@@ -742,22 +829,44 @@ export class Game {
   fail() {
     if (this.finished) return;
     this.finished = true;
-    this.running = false;
+    this.failed = true; // 순위표: 사고 리타이어 표시용
+    this.mpEnded = true; // 멀티: 방장이면 관전 트래픽 시뮬로 전환
     this.crashShake = 1.4; // 사고 임팩트 셰이크(감쇠는 updateCamera가 처리)
-    sounds.hit?.();
-    this.ui.onFail({
+    sounds.engineStop();
+    // 멀티: 사고 통지 — 상대 순위표에 "사고 (진행률%)"로 기록된다
+    this.net?.send({ t: 'crash', pr: Math.round((this.lastProgress || 0) * 1000) / 1000 });
+    const result = {
       totalTime: this.raceTime,
       maxSpeed: this.maxSpeed,
       avgSpeed: this.raceTime > 0 ? (this.totalDist / this.raceTime) * 3.6 : 0,
       progress: this.currentSampleIdx / (this.samples.length - 1),
-    });
+    };
+    if (this.net) {
+      // 멀티: 슬로모 없이 즉시 — 내 물리만 느려지면 상대 화면과 어긋난다
+      this.running = false;
+      this.ui.onFail(result);
+    } else {
+      // 싱글: 사고 슬로모(절제) — 잠깐 시간이 늘어지며 차가 미끄러지는 걸 보여주고
+      // 결과 흐름으로. 오버레이·시점 전환 없음(화면 가리는 연출 비선호)
+      this.slowmo = 1.15;
+      this._failUi = () => this.ui.onFail(result);
+    }
   }
 
   // 니어미스: 아슬아슬할수록 부스터 게이지를 많이 충전 (점수는 없음 — 순위는 평균속도)
+  // 가드레일 긁힘 효과음(연타 방지 쿨다운 — 밀착 중엔 ~0.3초 간격으로 지글거림)
+  railScrape() {
+    const now = performance.now();
+    if (this._scrapeCd && now - this._scrapeCd < 300) return;
+    this._scrapeCd = now;
+    sounds.scrape();
+  }
+
   onNearMiss(minDist, dir, near, collide) {
     const prox = THREE.MathUtils.clamp((near - minDist) / (near - collide), 0, 1); // 1=아슬아슬
     this.boostGauge += 0.12 + prox * 0.16;
     if (this.boostGauge >= 1) { this.car.boost(2.2); this.boostGauge = 0; sounds.boost?.(); }
+    sounds.whoosh?.(dir); // 스친 방향에서 도플러 "휙"
     this.flash = { t: 0.9, label: prox > 0.6 ? '아슬아슬!' : '니어미스!', close: prox > 0.6 };
   }
 
@@ -765,7 +874,7 @@ export class Game {
     const car = this.car.group;
     // 개발·검증: ?top=220 → 차 위 조감 뷰 (배치 문제 확인용)
     if (this.topViewH === undefined) {
-      const tv = parseFloat(new URLSearchParams(location.search).get('top'));
+      const tv = parseFloat(this.params.get('top'));
       this.topViewH = Number.isNaN(tv) ? 0 : tv;
     }
     if (this.topViewH > 0) {
@@ -781,10 +890,11 @@ export class Game {
       const h = this.car.heading;
       const fwd = new THREE.Vector3(Math.sin(h), 0, Math.cos(h));
       const leftV = new THREE.Vector3(Math.cos(h), 0, -Math.sin(h)); // 로컬 +X
+      const eye = this.cockpit?.eye || { x: 0.45, y: 1.42, z: 0.55 };
       this.camera.position.copy(car.position)
-        .addScaledVector(fwd, 0.55)
-        .addScaledVector(leftV, 0.45)
-        .add(new THREE.Vector3(0, 1.42, 0));
+        .addScaledVector(fwd, eye.z)
+        .addScaledVector(leftV, eye.x)
+        .add(new THREE.Vector3(0, eye.y, 0));
       lookAt = this.camera.position.clone().addScaledVector(fwd, 40);
     } else {
       const back = new THREE.Vector3(
@@ -808,9 +918,9 @@ export class Game {
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.07);
     this.camera.updateProjectionMatrix();
 
-    // 화면 흔들림은 '내 차 충돌' 때만 (속도·부스터 셰이크 제거)
+    // 화면 흔들림은 '내 차 충돌' 때만 (속도·부스터 셰이크 제거). 1인칭에선 미적용(사용자 피드백)
     if (this.crashShake > 0) this.crashShake = Math.max(0, this.crashShake - 0.03);
-    const shake = this.crashShake || 0;
+    const shake = this.fpView ? 0 : this.crashShake || 0;
     if (shake > 0.01) {
       this.camera.position.x += (Math.random() - 0.5) * shake;
       this.camera.position.y += (Math.random() - 0.5) * shake * 0.6;
@@ -938,7 +1048,11 @@ export class Game {
 
   finish() {
     this.running = false;
+    this.mpEnded = true; // 멀티: 방장이면 관전 트래픽 시뮬로 전환
+    this.finishTime = this.raceTime; // 순위표 기록
+    sounds.engineStop();
     sounds.finish();
+    this.net?.send({ t: 'fin', time: this.raceTime }); // 멀티: 완주 통지
     this.ui.onFinish({
       totalTime: this.raceTime,
       maxSpeed: this.maxSpeed,
@@ -949,7 +1063,18 @@ export class Game {
   loop() {
     if (this.disposed) return;
     requestAnimationFrame(() => this.loop());
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    let dt = Math.min(this.clock.getDelta(), 0.05);
+    // 사고 슬로모(싱글): 실시간 1.15초 동안 세계 전체가 0.28배속 — 끝나면 결과 화면
+    if (this.slowmo > 0) {
+      this.slowmo -= dt;
+      dt *= 0.28;
+      if (this.slowmo <= 0) {
+        this.running = false;
+        const failUi = this._failUi;
+        this._failUi = null;
+        failUi?.();
+      }
+    }
 
     if (this.running) {
       this.raceTime += dt;
@@ -971,12 +1096,17 @@ export class Game {
       // ── 물리: 힘 적용(플레이어+대향차) → 스텝 → 클램프/동기화 ──
       const playerS = this.traffic ? this.traffic.arcAtIndex(this.currentSampleIdx) : 0;
       this.car.update(dt, this.input);            // 플레이어 구동/조향 힘
+      // 상향등(F 홀드): 헤드라이트 증폭 + 앞차에 양보 요구
+      const hb = this.input.highBeam;
+      this.headlight.intensity = this.headlightBase.intensity * (hb ? 2.4 : 1);
+      this.headlight.distance = this.headlightBase.distance * (hb ? 1.5 : 1);
+      this.headlight.angle = this.headlightBase.angle * (hb ? 1.12 : 1);
       if (this.traffic) {
         // 플레이어의 차선 내 횡위치·속도 — 트래픽이 플레이어를 앞차로 취급
         const psmp = this.samples[this.currentSampleIdx];
         const plat = (this.car.body.position.x - psmp.pos.x) * psmp.left.x
           + (this.car.body.position.z - psmp.pos.z) * psmp.left.z;
-        this.traffic.control(dt, playerS, plat, this.car.speed);
+        this.traffic.control(dt, playerS, plat, this.car.speed, hb);
       }
       this.world.step(1 / 60, dt, 3);             // 강체 적분(충돌 해결)
 
@@ -994,42 +1124,84 @@ export class Game {
           const t = (di - this.restSpan) / (this.restRampSpan - this.restSpan);
           maxRight = this.restOuter + (this.laneMax - this.restOuter) * t;
         }
-        // 분기 진출 창: 우측을 열고, 분기 샘플이 본선보다 가까워지면 분기 모드 전환
+        // 분기 진출 창: 진출차로가 열린 만큼만 우측을 열고, 차가 본선 가장자리
+        // 실선을 실제로 넘어 차선에 올라타면 분기 모드로 전환(실도로 진출 방식)
         if (this.branch) {
           const bofs = this.currentSampleIdx - this.branch.exitIdx;
-          if (bofs > -Math.round(15 / this.segLen) && bofs < Math.round(70 / this.segLen)) {
-            maxRight = Math.max(maxRight, 30);
+          if (bofs > -this.branchWinN && bofs < Math.round(70 / this.segLen)) {
+            // 테이퍼 진행에 비례해 우측 한계 확장, 고어 뒤엔 완전 개방
+            const dApp = (bofs + this.branchWinN - 3) * this.segLen;
+            const laneW = Math.min(this.branch.laneW,
+              (this.branch.laneW * Math.max(0.1, dApp)) / this.branch.taperLen);
+            maxRight = Math.max(maxRight,
+              bofs > 0 ? 30 : this.branchEdgeLat + Math.max(laneW - 1.2, 0.3));
             const bres = this.nearestSampleOf(this.branch.samples, this.branchIdx, 90);
             this.branchIdx = bres.idx;
             const ms = this.samples[this.currentSampleIdx];
-            const mDist = Math.hypot(
-              this.car.body.position.x - ms.pos.x, this.car.body.position.z - ms.pos.z);
-            if (bres.idx > 4 && bres.dist < mDist - 0.6) this.onBranch = true;
+            const px = this.car.body.position.x, pz = this.car.body.position.z;
+            const mDist = Math.hypot(px - ms.pos.x, pz - ms.pos.z);
+            const lat = (px - ms.pos.x) * ms.left.x + (pz - ms.pos.z) * ms.left.z;
+            if (bres.idx > 4 && lat > this.branchEdgeLat - 0.6 && bres.dist < mDist - 0.6) {
+              this.onBranch = true;
+            }
           } else {
             this.branchIdx = 0; // 진출 창 밖 — 다음 접근을 위해 리셋
           }
         }
         if (!this.onBranch) {
-          clampToRoad(this.car.body, this.samples[this.currentSampleIdx], -this.laneMax, maxRight);
+          // 벽 밀착 감지(클램프 한계 초과) → 가드레일/분리대 긁힘 효과음
+          const csm = this.samples[this.currentSampleIdx];
+          const latC = (this.car.body.position.x - csm.pos.x) * csm.left.x
+            + (this.car.body.position.z - csm.pos.z) * csm.left.z;
+          if ((latC > maxRight + 0.05 || latC < this.laneMin - 0.05) && Math.abs(this.car.speed) > 4) {
+            this.railScrape();
+          }
+          // 좌측 한계는 중앙분리대(왕복 도로) — 대향 차로로 못 넘어간다
+          clampToRoad(this.car.body, this.samples[this.currentSampleIdx], this.laneMin, maxRight);
         }
       }
       if (this.onBranch) {
         // 분기 주행: 분기 샘플 기준 클램프 + 고도 추종(물리는 XZ 평면이라 y는 수동)
         const bres = this.nearestSampleOf(this.branch.samples, this.branchIdx, 60);
         this.branchIdx = bres.idx;
-        const bs = this.branch.samples[this.branchIdx];
-        const bHalf = this.branch.width / 2 - 1.1;
-        clampToRoad(this.car.body, bs, -bHalf, bHalf);
-        this.car.body.position.y += (bs.pos.y - this.car.body.position.y) * Math.min(1, 10 * dt);
-        // 올림픽대로 종점 도착 = 완주 (재합류 없음 — 대체 목적지)
-        if (!this.finished && this.branchIdx >= this.branch.samples.length - 30) {
-          this.finished = true;
-          this.finish();
+        // 고어 전(진출차로 위)에선 본선 복귀 허용 — 실도로처럼 차선만 걸친 상태라
+        // 왼쪽으로 되돌아가면 그대로 직진(강제 진출 방지)
+        let backToMain = false;
+        if (this.branch.dists[this.branchIdx] < this.branch.approachLen - 4) {
+          const mres = this.nearestSampleOf(this.samples, this.currentSampleIdx, 90);
+          const ms2 = this.samples[mres.idx];
+          const lat2 = (this.car.body.position.x - ms2.pos.x) * ms2.left.x +
+                       (this.car.body.position.z - ms2.pos.z) * ms2.left.z;
+          if (lat2 < this.branchEdgeLat - 1.5) {
+            this.onBranch = false;
+            this.currentSampleIdx = mres.idx;
+            backToMain = true;
+          }
+        }
+        if (!backToMain) {
+          const bs = this.branch.samples[this.branchIdx];
+          // 벽 밀착 감지(분기 연석/파라펫) → 긁힘 효과음
+          const latB = (this.car.body.position.x - bs.pos.x) * bs.left.x
+            + (this.car.body.position.z - bs.pos.z) * bs.left.z;
+          const bLo = this.branch.clampLo[this.branchIdx];
+          const bHi = this.branch.clampHi[this.branchIdx];
+          if ((latB > bHi + 0.05 || latB < bLo - 0.05) && Math.abs(this.car.speed) > 4) {
+            this.railScrape();
+          }
+          // 구간별 비대칭 클램프: 진출차로/램프는 대칭, 합류 차선에선 서쪽(본선 남행
+          // 차로)으로 크게 열려 언제든 도로로 건너갈 수 있다
+          clampToRoad(this.car.body, bs, bLo, bHi);
+          this.car.body.position.y += (bs.pos.y - this.car.body.position.y) * Math.min(1, 10 * dt);
+          // 올림픽대로 종점 도착 = 완주 (재합류 없음 — 대체 목적지)
+          if (!this.finished && this.branchIdx >= this.branch.samples.length - 30) {
+            this.finished = true;
+            this.finish();
+          }
         }
       }
       this.car.sync();
       if (this.traffic) this.traffic.postStep(this.laneMax);
-      this.onRoad = true;
+      if (this.net) this.mpTick(dt); // 멀티: 원격 차 보간 + 스냅샷 송수신
 
       // 니어미스 칼치기: 아슬아슬하게 스치면 부스터 게이지 충전
       if (this.traffic) {
@@ -1039,6 +1211,37 @@ export class Game {
       if (this.flash) {
         this.flash.t -= dt;
         if (this.flash.t <= 0) this.flash = null;
+      }
+
+      // 엔진음: 속도(가상 기어 피치)·스로틀·부스터 반영
+      sounds.engineUpdate(this.car.speedKmh, this.input.forward ? 1 : 0, this.car.boostTimer > 0);
+
+      // 미니맵 갱신(~10Hz)
+      this._mmAcc = (this._mmAcc || 0) + dt;
+      if (this.minimap && this._mmAcc >= 0.1) {
+        this._mmAcc = 0;
+        this.minimap.update(
+          this.car.body.position, this.car.heading,
+          [...this.remotes.values()].map((r) => r.group.position));
+      }
+
+      // 분기 사전 안내: 출구 500m/150m 전 1회씩 (분기 미진입 상태에서만)
+      if (this.branch && !this.onBranch && !this.finished) {
+        const dEx = (this.branch.exitIdx - this.currentSampleIdx) * this.segLen;
+        if (dEx > 0 && dEx < 500 && !this._exitN1) {
+          this._exitN1 = true;
+          this.flash = { t: 2.4, label: '올림픽대로 출구 500m', sub: '우측 진출차로 이용' };
+        }
+        if (dEx > 0 && dEx < 160 && !this._exitN2) {
+          this._exitN2 = true;
+          this.flash = { t: 2.2, label: '출구 앞', sub: '지금 우측 차선으로 →' };
+        }
+      }
+
+      // 조작 힌트: 주행 9초 뒤 페이드아웃 (?stats=1이면 통계 표시용이라 유지)
+      if (!this._hintFaded && !this.showStats && this.raceTime > 9) {
+        this._hintFaded = true;
+        document.querySelector('.controls-hint')?.classList.add('faded');
       }
 
       // 평균속도: 전진 거리만 누적(후진·정차는 손해)
@@ -1055,6 +1258,16 @@ export class Game {
             this.branch.exitIdx / nAll, 1,
             this.branchIdx / (this.branch.samples.length - 30))
         : this.currentSampleIdx / nAll;
+      this.lastProgress = hudProgress; // 멀티: 스냅샷·순위 계산용
+      // 멀티: 실시간 순위 — 원격 피어들의 진행률(스냅샷 pr)과 비교
+      let rank = null, racers = null;
+      if (this.net && this.remotes.size > 0) {
+        rank = 1;
+        for (const r of this.remotes.values()) {
+          if ((r.progress || 0) > hudProgress) rank++;
+        }
+        racers = this.remotes.size + 1;
+      }
       this.ui.onHud({
         speed: this.car.speedKmh,
         progress: hudProgress,
@@ -1063,34 +1276,80 @@ export class Game {
         boosting: this.car.boostTimer > 0,
         boostGauge: this.boostGauge,
         flash: this.flash,
+        rank, racers,
       });
+    } else if (this.net && this.mpHost && this.mpEnded && this.traffic && this.remotes.size > 0) {
+      // 방장 관전 모드: 내 레이스가 끝나도(사고·완주) 트래픽 시뮬·중계는 계속 —
+      // 멈추면 게스트 화면의 차들이 전부 얼어붙는다. 기준점(스폰 앵커)은 선두 게스트
+      let lead = null;
+      for (const r of this.remotes.values()) {
+        if (!lead || (r.progress || 0) > (lead.progress || 0)) lead = r;
+      }
+      if (lead) {
+        const res = this.nearestSampleOf(
+          this.samples, this._specIdx ?? this.currentSampleIdx, 240, lead.group.position);
+        this._specIdx = res.idx;
+        const anchorS = this.traffic.arcAtIndex(res.idx);
+        this.traffic.control(dt, anchorS, 0, 20, false);
+        this.world.step(1 / 60, dt, 3);
+        this.traffic.postStep(this.laneMax);
+        this.mpTick(dt); // 원격 차 보간 + 트래픽 중계 지속
+      }
+    }
+
+    // 결과 화면 순위표 라이브 갱신 — 내가 끝나도 상대 기록(fin/crash/진행률)은 계속 들어온다
+    if (this.finished && this.net && this._standingsDirty) {
+      this._stAcc = (this._stAcc || 0) + dt;
+      if (this._stAcc >= 0.5) {
+        this._stAcc = 0;
+        this._standingsDirty = false;
+        this.ui.onStandings?.(this.getStandings());
+      }
     }
 
     this.worldTime += dt;
     this.envUpdate?.(this.worldTime, dt);
     this.skyLife?.update(this.worldTime, dt);
     this.particles.update(dt);
+    this.rain?.update(dt, this.camera.position);
     this.updateCamera();
     this.updateCockpit(dt);
     this.updateSun();
     this.updateLampLights();
+    // 그림자 격프레임 갱신 (autoUpdate=false 페어)
+    this._shadowFlip = !this._shadowFlip;
+    if (this._shadowFlip) this.renderer.shadowMap.needsUpdate = true;
     if (this.showStats) this.renderer.info.reset();
     this.composer.render();
 
     if (this.showStats) {
+      // FPS: 최근 30프레임 이동평균
+      this._fpsAcc = (this._fpsAcc || 0) + dt;
+      this._fpsN = (this._fpsN || 0) + 1;
+      if (this._fpsN >= 30) {
+        this._fps = Math.round(this._fpsN / this._fpsAcc);
+        this._fpsAcc = 0;
+        this._fpsN = 0;
+      }
       const r = this.renderer.info.render;
       const el = document.querySelector('.controls-hint');
-      if (el) el.textContent = `draw calls: ${r.calls} · tris: ${(r.triangles / 1000).toFixed(0)}k`;
+      if (el) el.textContent =
+        `fps: ${this._fps || '…'} · draw calls: ${r.calls} · tris: ${(r.triangles / 1000).toFixed(0)}k`;
     }
   }
 
   dispose() {
     this.disposed = true;
     this.running = false;
+    sounds.engineStop();
+    this.minimap?.dispose();
     window.removeEventListener('keydown', this.keydown);
     window.removeEventListener('keyup', this.keyup);
     window.removeEventListener('resize', this.onResize);
+    this.rain?.dispose();
     this.traffic?.dispose();
+    if (!this.netHandoff) this.net?.close(); // 재대결: 소켓은 새 게임이 인계
+    for (const r of this.remotes?.values() ?? []) r.dispose();
     this.cockpit?.rt.dispose();
     this.composer?.dispose();
     this.renderer?.dispose();

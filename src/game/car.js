@@ -29,18 +29,38 @@ export class Car {
       .map((n) => model.getObjectByName(n))
       .filter(Boolean);
     this.body = makeCarBody(world, { w: 2.2, h: 1.0, l: 5.2, mass: MASS, pos: startPos });
+    // 실사 PBR 모델(car7): metalness 1.0 재질은 어두운 야간 환경맵에서 새까맣게 죽는다
+    // (금속은 환경반사가 광원의 전부) — 메탈 낮춰 실광원(헤드라이트·가로등)에 반응시키고 env 부스트.
+    // 오픈탑이라 추격 카메라에 실내 가죽이 크게 보인다 — 밝은 웜톤이 튀지 않게 감쇠.
+    if (modelName === 'car7') {
+      model.traverse((o) => {
+        if (!o.isMesh) return;
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        ms.forEach((m) => {
+          if (!m || !('envMapIntensity' in m)) return;
+          m.envMapIntensity = 2.2;
+          if (m.metalness !== undefined && m.metalness > 0.6) m.metalness = 0.55;
+          if (!m.userData.p918Toned && /Leather|Fabric|Alcantara|Interior|Belt/.test(m.name || '')) {
+            m.color.multiplyScalar(0.42);
+            m.userData.p918Toned = true; // 캐시 원본 공유 — 중복 감쇠 방지
+          }
+        });
+      });
+    }
     this.boostTimer = 0;
     this.roll = 0;
 
     // 후미등: Blender에서 모델에 넣은 발광 재질(LightR*)을 찾아 사용.
     // 평소엔 은은한 러닝라이트, 감속 시 밝게. (재질은 복제해 프리뷰 등에 영향 없게)
+    // car7(Sketchfab 918)은 재질명이 'tail_light.001' — 하우징(Tail_Light_Base)은 제외
     this.tailMats = [];
     this.tailBase = 1.0;
     model.traverse((o) => {
       if (!o.isMesh || !o.material) return;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       mats.forEach((mat, i) => {
-        if (!mat || !/^LightR/.test(mat.name || '')) return;
+        const nm = (mat && mat.name) || '';
+        if (!mat || !(/^LightR/.test(nm) || /^tail_light(\.\d+)?$/i.test(nm))) return;
         const cl = mat.clone();
         cl.emissive = new THREE.Color(0xff1414);
         cl.emissiveIntensity = this.tailBase;

@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { pick, range } from '../utils/rng.js';
 import { getAssetTemplate, instantiate } from '../utils/assets.js';
+import { buildRoadMesh } from './trackGenerator.js';
 
 const SHOULDER = 2.2;        // 도로 가장자리 → 파라펫까지 갓길 폭
 const PARAPET_HEIGHT = 1.15;
@@ -221,6 +222,19 @@ function adStripTexture() {
   });
 }
 
+// 장식 차량 지오메트리(차체+캐빈 / 전조·후미등 쌍) — 강변도로·본선 대향 차로 공용
+function mkCarGeo() {
+  const g1 = new THREE.BoxGeometry(1.72, 0.62, 4.3); g1.translate(0, 0.62, 0);
+  const g2 = new THREE.BoxGeometry(1.5, 0.5, 2.1); g2.translate(0, 1.12, -0.25);
+  return mergeGeometries([g1, g2]);
+}
+function mkPairGeo(r, y, z) {
+  const a = new THREE.SphereGeometry(r, 6, 5); a.translate(-0.55, y, z);
+  const b = new THREE.SphereGeometry(r, 6, 5); b.translate(0.55, y, z);
+  return mergeGeometries([a, b]);
+}
+const GHOST_CAR_TONES = [0x2e3138, 0x3a3f4a, 0x23262e, 0x424855, 0x555b66, 0x2b2f3d];
+
 function composeMatrix(pos, yaw, scale = new THREE.Vector3(1, 1, 1)) {
   return new THREE.Matrix4().compose(
     pos,
@@ -390,6 +404,12 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth, buildi
       skirtMat
     ));
   }
+  // 3-2) 데크 바닥판 — 노면 리본은 윗면만 있어 아래(강변도로·램프 하부 통과)에서
+  // 올려다보면 데크가 투명하게 뚫려 보인다. 스커트 하단 깊이에 맞춰 닫는다
+  scene.add(new THREE.Mesh(
+    trackRibbon(samples, { wHalf: parapetOffset + 0.35, yBase: -2.4 }),
+    skirtMat
+  ));
 
   // 4) 파라펫 + LED 스트립 + 젖은 노면 반사 밴드
   const parapetMat = new THREE.MeshBasicMaterial({ color: 0x31343e, side: THREE.DoubleSide });
@@ -856,11 +876,15 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth, buildi
     if (river) {
       for (let z = tb.min.z - 450; z < tb.max.z + 450; z += 26) {
         if (Math.abs(z - river.zBridge) < 60) continue; // 다리 접속부 비움
-        for (const bx of [river.x0 - 10.5, river.x1 + 10.5]) {
+        // 강변도로(폭 14.6, 중심 x0-16/x1+16) 도시 쪽 바깥에 세운다 —
+        // 예전 x0-10.5 라인은 도로가 넓어지면서 노면 위에 서게 됐음("나무가 도로 위" 피드백)
+        for (const bx of [river.x0 - 26.5, river.x1 + 26.5]) {
           if (rng() < 0.3) continue;
+          const tz3 = z + range(rng, -4, 4);
+          if (nearBranch(bx, tz3, 9)) continue; // 램프·루프 위 금지
           const s = range(rng, 0.8, 1.3);
           treeMats.push(composeMatrix(
-            new THREE.Vector3(bx, 0, z + range(rng, -4, 4)),
+            new THREE.Vector3(bx, 0, tz3),
             rng() * Math.PI * 2, new THREE.Vector3(s, s, s)));
         }
       }
@@ -1019,40 +1043,8 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth, buildi
     // 개방 구간(쉼터·분기)까지의 인덱스 여유 — 음수면 구간 안
     const dRestOf = (i) => gapDistIdx(i);
 
-    // 노면 데칼 — 도로 위 페인트. 텍스트 상단이 진행 방향을 향하게 굽는다.
-    const tex80 = canvasTex(128, 256, (ctx) => {
-      ctx.font = 'bold 150px sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(232,236,244,0.8)';
-      ctx.fillText('80', 64, 128);
-    });
-    const texArrow = canvasTex(128, 256, (ctx) => {
-      ctx.fillStyle = 'rgba(232,236,244,0.75)';
-      ctx.beginPath();
-      ctx.moveTo(64, 10); ctx.lineTo(104, 88); ctx.lineTo(78, 88);
-      ctx.lineTo(78, 244); ctx.lineTo(50, 244); ctx.lineTo(50, 88);
-      ctx.lineTo(24, 88); ctx.closePath(); ctx.fill();
-    });
-    const decalGeo = new THREE.PlaneGeometry(2.0, 4.2);
-    decalGeo.rotateX(-Math.PI / 2); // 바닥에 눕히고
-    decalGeo.rotateY(Math.PI);      // 글자 상단이 로컬 +Z(진행 방향)로
-    const mats80 = [], matsArrow = [];
-    const laneOff = [-1.5, -0.5, 0.5, 1.5].map((v) => v * (roadWidth / 4));
-    const dStep = Math.max(6, Math.floor(n / 16));
-    for (let i = 4, k = 0; i < n - 10; i += dStep, k++) {
-      if (dRestOf(i) < 4) continue;
-      const s = samples[i];
-      const lat = pick(rng, laneOff);
-      const m = composeMatrix(
-        s.pos.clone().addScaledVector(s.left, lat).add(new THREE.Vector3(0, 0.03, 0)),
-        Math.atan2(s.tangent.x, s.tangent.z));
-      (k % 2 === 0 ? mats80 : matsArrow).push(m);
-    }
-    const decalMat = (map) => new THREE.MeshBasicMaterial({
-      map, transparent: true, depthWrite: false, fog: true,
-    });
-    if (mats80.length) addInstanced(scene, decalGeo, decalMat(tex80), mats80);
-    if (matsArrow.length) addInstanced(scene, decalGeo.clone(), decalMat(texArrow), matsArrow);
+    // (노면 페인트 데칼 — "80" 숫자·직진 화살표 — 는 야간에 뭉개져 잘 안 보인다는
+    //  사용자 피드백으로 제거함. 재추가 시 고해상 텍스처+발광으로 다시 설계할 것)
 
     // 과속카메라 2대 — 우측 갓길 폴 + 도로 위로 뻗은 암 + 카메라 박스
     const camMat = new THREE.MeshLambertMaterial({ color: 0x8a8d95 });
@@ -1112,7 +1104,7 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth, buildi
 
   // 8) 강(루트가 다리로 건너는 남북 밴드) + 물가 야경 반사 + 교량 아치
   if (river) {
-    buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, !!branchPts, palette);
+    buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, !!branchPts, palette, lampHeads);
     buildBridgeArches(scene, samples, river, parapetOffset);
   }
 
@@ -1177,6 +1169,65 @@ export function buildEnvironment(scene, rng, samples, palette, roadWidth, buildi
     }));
     farDots.frustumCulled = false;
     scene.add(farDots);
+  }
+
+  // 11) 대향 차로(중앙분리대 좌측 4차선) 장식 차량 — 왕복 8차선의 반대 방향 흐름.
+  // 플레이어는 laneMin 클램프로 분리대를 못 넘으므로 물리 없이 인스턴스만으로 안전.
+  {
+    const cum = new Float32Array(n);
+    for (let i = 0; i < n - 1; i++) cum[i + 1] = cum[i] + samples[i].pos.distanceTo(samples[i + 1].pos);
+    const L = cum[n - 1];
+    const laneW = roadWidth / 8;
+    const gcars = [];
+    const NG = Math.max(8, Math.round(L / 85));
+    for (let k = 0; k < NG; k++) {
+      gcars.push({
+        s0: rng() * L,
+        spd: 19 + rng() * 12,
+        lane: -laneW * (0.5 + Math.floor(rng() * 4)), // 좌측 4개 차선 중심
+      });
+    }
+    const gBody = new THREE.InstancedMesh(mkCarGeo(),
+      new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x0e1016 }), gcars.length);
+    const gHead = new THREE.InstancedMesh(mkPairGeo(0.17, 0.62, 2.16),
+      new THREE.MeshBasicMaterial({ color: 0xfff2cf, fog: true }), gcars.length);
+    const gTail = new THREE.InstancedMesh(mkPairGeo(0.14, 0.66, -2.16),
+      new THREE.MeshBasicMaterial({ color: 0xff3a3a, fog: true }), gcars.length);
+    const _gc = new THREE.Color();
+    for (let i = 0; i < gcars.length; i++) gBody.setColorAt(i, _gc.set(pick(rng, GHOST_CAR_TONES)));
+    if (gBody.instanceColor) gBody.instanceColor.needsUpdate = true;
+    for (const im of [gBody, gHead, gTail]) { im.frustumCulled = false; scene.add(im); }
+    const _gm = new THREE.Matrix4();
+    const _gp = new THREE.Vector3();
+    const _gq = new THREE.Quaternion();
+    const _g1 = new THREE.Vector3(1, 1, 1);
+    updaters.push((t) => {
+      for (let i = 0; i < gcars.length; i++) {
+        const c = gcars[i];
+        // 대향 = 트랙 역방향 진행 (s 감소)
+        const s = ((c.s0 - t * c.spd) % L + L) % L;
+        let lo = 0, hi = n - 1;
+        while (lo + 1 < hi) { const mid = (lo + hi) >> 1; if (cum[mid] <= s) lo = mid; else hi = mid; }
+        const seg = Math.max(1e-4, cum[lo + 1] - cum[lo]);
+        const tt = (s - cum[lo]) / seg;
+        const a = samples[lo], b = samples[lo + 1];
+        _gp.copy(a.pos).lerp(b.pos, tt);
+        const tanx = a.tangent.x + (b.tangent.x - a.tangent.x) * tt;
+        const tanz = a.tangent.z + (b.tangent.z - a.tangent.z) * tt;
+        const lx = a.left.x + (b.left.x - a.left.x) * tt;
+        const lz = a.left.z + (b.left.z - a.left.z) * tt;
+        _gp.x += lx * c.lane; _gp.z += lz * c.lane;
+        _gp.y += 0.02;
+        _gq.setFromAxisAngle(UP, Math.atan2(-tanx, -tanz)); // 역방향 요
+        _gm.compose(_gp, _gq, _g1);
+        gBody.setMatrixAt(i, _gm);
+        gHead.setMatrixAt(i, _gm);
+        gTail.setMatrixAt(i, _gm);
+      }
+      gBody.instanceMatrix.needsUpdate = true;
+      gHead.instanceMatrix.needsUpdate = true;
+      gTail.instanceMatrix.needsUpdate = true;
+    });
   }
 
   return { lampHeads, update: (t, dt) => { for (const f of updaters) f(t, dt); } };
@@ -1292,7 +1343,7 @@ function buildHouseClusters(scene, rng, coarse, palette, tcx, tcz, textent, inRi
 // 강 밴드(x0~x1, 남북 방향): 하늘 반사 + 잔물결이 흐르는 수면, 콘크리트 호안,
 // 강변 산책로 조명, 물가 불빛의 수면 반사 스트릭. 강변 빌딩은 도심과 같은
 // GLB 인스턴스(bankSpots는 그 배치 정보)로 buildEnvironment에서 세운다.
-function buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, hasBranch = false, palette = null) {
+function buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, hasBranch = false, palette = null, lampHeads = null) {
   const { x0, x1, zBridge } = river;
   const bbox = new THREE.Box3();
   samples.forEach((s) => bbox.expandByPoint(s.pos));
@@ -1395,6 +1446,8 @@ function buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, has
     if (Math.abs(wz - zBridge) < 70) continue;
     for (const [lx, side] of [[x0, -1], [x1, 1]]) {
       const jz = wz + range(rng, -3, 3);
+      // 서안 합류 차선(x0-7.5 라인, 램프 하강~테이퍼)이 지나는 구간은 산책로 등 스킵
+      if (hasBranch && side < 0 && jz < zBridge - 190 && jz > zBridge - 390) continue;
       walkMats.push(new THREE.Matrix4().compose(
         new THREE.Vector3(lx + side * 7.5, 1.9, jz),
         new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)));
@@ -1403,6 +1456,13 @@ function buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, has
   }
   if (walkMats.length) addInstanced(scene, new THREE.SphereGeometry(0.26, 6, 5),
     new THREE.MeshBasicMaterial({ color: 0xffd9a2, fog: true }), walkMats);
+  // 산책로 등은 공중에 뜬 광구가 아니라 기둥 위 보행등으로 — 기둥만 아래에 세운다
+  if (walkMats.length) {
+    const poleLocal = new THREE.Matrix4().makeTranslation(0, -0.95, 0);
+    addInstanced(scene, new THREE.CylinderGeometry(0.045, 0.06, 1.8, 6),
+      new THREE.MeshLambertMaterial({ color: 0x2e3138 }),
+      walkMats.map((m) => m.clone().multiply(poleLocal)));
+  }
 
   // 반사 스트릭 공용 리소스 (아래 여러 섹션에서 사용 — 반드시 먼저 선언)
   // 밝은 끝(+V)이 +X를 향하게 굽기 → 동안(x1)용. 서안은 yaw 180°로 뒤집는다.
@@ -1474,112 +1534,167 @@ function buildRiverCrossing(scene, rng, samples, river, bankSpots, updaters, has
   bglow.position.set((x0 + x1) / 2, 0.45, zBridge); // 물결(최고 ~0.28) 위
   scene.add(bglow);
 
-  // ── 강변도로(강변북로·올림픽대로 느낌): 양안을 따라 남북으로, 다리 아래를 통과 ──
-  const roadTex = canvasTex(64, 256, (ctx, w, h) => {
-    ctx.fillStyle = '#20232b'; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = 'rgba(200,205,215,0.5)';
-    for (let y = 0; y < h; y += 64) ctx.fillRect(w / 2 - 2, y, 4, 34); // 중앙 점선
-    ctx.fillStyle = 'rgba(210,215,225,0.4)';
-    ctx.fillRect(2, 0, 3, h); ctx.fillRect(w - 5, 0, 3, h);           // 가장자리 실선
-  });
-  roadTex.wrapT = THREE.RepeatWrapping;
-  roadTex.repeat.set(1, riverLen / 14);
-  const roadXs = [x0 - 16, x1 + 16];
-  for (const rx of roadXs) {
-    const road = new THREE.Mesh(
-      new THREE.PlaneGeometry(10, riverLen * 0.96),
-      new THREE.MeshBasicMaterial({ map: roadTex, fog: true })
-    );
-    road.rotation.x = -Math.PI / 2;
-    road.position.set(rx, 0.01, cz);
+  // ── 강변도로(강변북로·올림픽대로): 왕복 4차선 아스팔트(황색 중앙복선·차로 점선)
+  //    + 실물 가로등(기둥/암/헤드/볼륨콘/빛웅덩이) + 콘크리트 방호벽
+  //    + 차체 있는 차량(전조/후미등 쌍) — "떠 있는 광구·점 불빛" 전면 교체 ──
+  const ROAD_W = 14.6;
+  const zNorth = cz + riverLen * 0.48;
+  const zSouth = cz - riverLen * 0.48;
+  // 서안 도로는 남북 전장 '하나의' 왕복 도로(사용자 요청 — 기존 이중 도로 제거).
+  // 분기 램프는 도로 위를 고가로 횡단해 동측(강측)에 합류 차선으로 붙었다가
+  // 테이퍼로 사라진다(branchRoad.js) — 그 구간만 동측 방호벽·가로등을 연다.
+  const mergeHole = hasBranch ? { side: 1, z0: zBridge - 380, z1: zBridge - 160 } : null;
+  const roadRuns = [
+    { rx: x0 - 16, z0: zSouth, z1: zNorth, side: -1, hole: mergeHole, noSouthCars: hasBranch },
+    { rx: x1 + 16, z0: zSouth, z1: zNorth, side: 1 },
+  ];
+  const railMat = new THREE.MeshLambertMaterial({ color: 0x4a4e58 });
+  for (const run of roadRuns) {
+    // 본선과 완전히 같은 도로(사용자 요청): buildRoadMesh + createRoadTexture
+    // (아스팔트 골재·얼룩·크랙·마모 흰 실선/점선, MeshStandard 톤 동일)
+    const rvSamples = [];
+    for (let z = run.z0; z <= run.z1; z += 8) {
+      rvSamples.push({
+        pos: new THREE.Vector3(run.rx, 0, z),
+        // 게임 규약: left = (-tan.z, 0, tan.x) — 반대로 넣으면 winding이 뒤집혀
+        // 노면이 백페이스 컬링돼 아예 안 보인다(빛웅덩이만 남는 함정)
+        left: new THREE.Vector3(-1, 0, 0),
+        tangent: new THREE.Vector3(0, 0, 1),
+      });
+    }
+    const road = buildRoadMesh(rvSamples, ROAD_W, 2); // 왕복 4차선(방향별 2차선)
+    if (palette?.tod === 'dusk') road.material.envMapIntensity = 0.35; // 본선과 동일 보정
+    // 강변은 본선보다 가로등 실광원 밀도가 낮다(합류 구간은 동측 스킵) — 은은한 플로어만
+    road.material.emissive.setHex(0x15171c);
+    road.material.emissiveIntensity = 1.0;
     scene.add(road);
-    // 나트륨등 글로우: 도로 띠가 다리 위에서도 또렷이 보이게
-    const rglow = new THREE.Mesh(
-      new THREE.PlaneGeometry(9, riverLen * 0.96),
-      new THREE.MeshBasicMaterial({
-        color: 0xffb45c, transparent: true, opacity: 0.10,
-        blending: THREE.AdditiveBlending, depthWrite: false, fog: true,
-      })
-    );
-    rglow.rotation.x = -Math.PI / 2;
-    rglow.position.set(rx, 0.04, cz);
-    scene.add(rglow);
-  }
-  // 강변도로 가로등 행렬: 도로 바깥쪽을 따라 따뜻한 불빛 점
-  const roadLampMats = [];
-  for (let wz = cz - riverLen / 2 + 20; wz < cz + riverLen / 2 - 20; wz += 26) {
-    for (const rx of roadXs) {
-      const out = rx < (x0 + x1) / 2 ? -5.6 : 5.6; // 강 반대쪽 가장자리
-      roadLampMats.push(new THREE.Matrix4().compose(
-        new THREE.Vector3(rx + out, 4.4, wz + range(rng, -4, 4)),
-        new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)));
+    // 콘크리트 방호벽 양측 — 합류 구간(hole)은 그 측만 분절해서 연다
+    for (const s of [-1, 1]) {
+      const hole = run.hole && run.hole.side === s ? run.hole : null;
+      const segs = hole ? [[run.z0, hole.z0], [hole.z1, run.z1]] : [[run.z0, run.z1]];
+      for (const [a, b] of segs) {
+        if (b - a < 4) continue;
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.85, b - a), railMat);
+        rail.position.set(run.rx + s * (ROAD_W / 2 + 0.42), 0.42, (a + b) / 2);
+        scene.add(rail);
+      }
     }
   }
-  addInstanced(scene, new THREE.SphereGeometry(0.32, 6, 5),
-    new THREE.MeshBasicMaterial({ color: 0xffe2b0, fog: true }), roadLampMats);
 
-  // 강변도로 차량 불빛: 흰(전조등)·붉은(후미등) 점들이 반대 방향으로 흐른다.
-  // InstancedMesh 2개로 드로우콜 2 — 매 프레임 행렬만 갱신.
-  const span = riverLen * 0.9;
-  const zBase = cz - span / 2;
-  const mkDotIm = (color, count) => {
-    const im = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.42, 6, 5),
-      new THREE.MeshBasicMaterial({ color, fog: true }), count);
+  // 강변 가로등: 본선과 같은 실물 부품 인스턴싱(지그재그 양측).
+  // 도로가 전장 하나이므로 별도 분기 구간 가로등은 없다 — 합류 구간 서측만 스킵
+  // (합류 차선이 지나는 자리, branchRoad.js의 연석·차선이 대신 채운다).
+  const lampRuns = roadRuns.map((r) => ({ ...r, w: ROAD_W }));
+  const rvLampM = [], rvPoolM = [];
+  const flatQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  let rvIdx = 0;
+  for (const run of lampRuns) {
+    for (let wz = run.z0 + 14; wz < run.z1 - 8; wz += 34) {
+      const lside = rvIdx++ % 2 === 0 ? 1 : -1;
+      if (run.hole && lside === run.hole.side && wz > run.hole.z0 && wz < run.hole.z1) continue;
+      const px = run.rx + lside * (run.w / 2 + 0.9);
+      const yaw = lside > 0 ? -Math.PI / 2 : Math.PI / 2; // 헤드(로컬 +z)가 도로 중앙으로
+      const lm = composeMatrix(new THREE.Vector3(px, 0, wz), yaw);
+      rvLampM.push(lm);
+      // 실광원 풀 후보 등록 — 없으면 강변도로(MeshStandard)가 새까맣게 남는다(본선과 동일 체계)
+      if (lampHeads) lampHeads.push(new THREE.Vector3(0, 5.0, 1.75).applyMatrix4(lm));
+      rvPoolM.push(new THREE.Matrix4().compose(
+        new THREE.Vector3(run.rx + lside * (run.w / 2 - 2.4), 0.05, wz),
+        flatQ, new THREE.Vector3(1, 1, 1)));
+    }
+  }
+  const rvPoleMat = new THREE.MeshLambertMaterial({ color: 0x3a3d47 });
+  const rvConeMat = makeConeMaterial();
+  const rvDusk = palette?.tod === 'dusk';
+  if (rvDusk) rvConeMat.uniforms.uIntensity.value = 0.16;
+  const rvParts = [
+    { geo: new THREE.CylinderGeometry(0.12, 0.16, 5.2, 8), mat: rvPoleMat, local: [0, 2.6, 0] },
+    { geo: new THREE.BoxGeometry(0.16, 0.16, 2.0), mat: rvPoleMat, local: [0, 5.1, 0.9] },
+    { geo: new THREE.BoxGeometry(0.42, 0.14, 0.68), mat: new THREE.MeshBasicMaterial({ color: 0xfff1d4 }), local: [0, 5.0, 1.75] },
+    { geo: new THREE.CylinderGeometry(0.28, 3.6, CONE_HEIGHT, 24, 1, true), mat: rvConeMat, local: [0, 2.35, 1.75] },
+  ];
+  for (const part of rvParts) {
+    const lm = new THREE.Matrix4().makeTranslation(part.local[0], part.local[1], part.local[2]);
+    addInstanced(scene, part.geo, part.mat, rvLampM.map((m) => m.clone().multiply(lm)));
+  }
+  addInstanced(scene, new THREE.PlaneGeometry(22, 22), new THREE.MeshBasicMaterial({
+    map: lightPoolTexture(), transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, opacity: rvDusk ? 0.4 : 1,
+  }), rvPoolM);
+
+  // 강변도로 차량: 점 불빛이 아니라 차체+전조/후미등 쌍. 우측통행(북행=서측 차로).
+  const cars = [];
+  for (const run of roadRuns) {
+    const L = run.z1 - run.z0 - 30;
+    const per = Math.round(L / 38); // 방향당 밀도(평균 차간 ~38m)
+    // 서안(플레이어가 동측 반부를 남행): 남행 가짜 차는 플레이어 반부를 침범하므로
+    // 북행(서측 반부, 표준 우측통행 배치)만 남긴다.
+    // ⚠ 임시(사용자 테스트): 서안 대향 차량 비활성 — 되살리려면 []를 [1]로
+    const dirs = run.noSouthCars ? [] : [1, -1];
+    for (const dir of dirs) {
+      for (let k = 0; k < per; k++) {
+        const spd = 22 + rng() * 14; // 고속화도로 속도 — 느리면 멈춘 듯 보임
+        const off = rng() * L;
+        const lane = rng() < 0.55 ? 1.83 : 5.45; // 본선 텍스처 4차선 중심(±1.825/±5.475)에 정렬
+        cars.push({ run, dir, spd, off, lane, L });
+        // 앞차를 따라가는 플래툰 — 흐르는 교통 느낌
+        if (rng() < 0.35) cars.push({ run, dir, spd, off: off - 8 - rng() * 10, lane, L });
+      }
+    }
+  }
+  const bodyIm = new THREE.InstancedMesh(mkCarGeo(),
+    new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x0e1016 }), cars.length);
+  const headIm = new THREE.InstancedMesh(mkPairGeo(0.17, 0.62, 2.16),
+    new THREE.MeshBasicMaterial({ color: 0xfff2cf, fog: true }), cars.length);
+  const tailIm = new THREE.InstancedMesh(mkPairGeo(0.14, 0.66, -2.16),
+    new THREE.MeshBasicMaterial({ color: 0xff3a3a, fog: true }), cars.length);
+  const carTones = [0x2e3138, 0x3a3f4a, 0x23262e, 0x424855, 0x555b66, 0x2b2f3d];
+  const _col = new THREE.Color();
+  for (const im of [bodyIm, headIm, tailIm]) {
     im.frustumCulled = false;
     scene.add(im);
-    return im;
-  };
-  const roadDots = [];
-  for (const rx of roadXs) {
-    // 서안(x0-16) 도로는 분기 루트로 플레이어가 직접 달린다 →
-    // 가짜 점 불빛이 차를 통과해 지나가면 안 되므로 동안에만 배치
-    if (hasBranch && rx < (x0 + x1) / 2) continue;
-    const per = hasBranch ? 32 : 20; // 한쪽만 쓰면 그쪽 밀도를 높여 보상
-    for (let k = 0; k < per; k++) {
-      const spd = 22 + rng() * 14; // 고속화도로 속도(22~36m/s) — 느리면 멈춘 듯 보임
-      const off = rng() * span;
-      roadDots.push({ rx, off, spd });
-      // 앞차를 따라가는 소그룹(플래툰) — 흐르는 교통 느낌
-      if (rng() < 0.4) roadDots.push({ rx, off: off - 7 - rng() * 9, spd });
-    }
   }
-  const whiteIm = mkDotIm(0xfff2cf, roadDots.length);
-  const redIm = mkDotIm(0xff3a3a, roadDots.length);
-  // 차량 불빛의 수면 반사: 물가에서 안쪽으로 번지는 짧은 스트릭이 점을 따라다닌다
-  const mkReflIm = (hex) => {
+  for (let i = 0; i < cars.length; i++) bodyIm.setColorAt(i, _col.set(pick(rng, carTones)));
+  if (bodyIm.instanceColor) bodyIm.instanceColor.needsUpdate = true;
+  // 차량 불빛의 수면 반사: 북행(흰)·남행(붉은) 스트릭이 차를 따라다닌다
+  const nNorth = cars.filter((c) => c.dir > 0).length;
+  const mkReflIm = (hex, count) => {
     const im = new THREE.InstancedMesh(streakGeo, new THREE.MeshBasicMaterial({
       map: streakTex, color: hex, transparent: true,
       blending: THREE.AdditiveBlending, depthWrite: false, fog: true,
-    }), roadDots.length);
+    }), count);
     im.frustumCulled = false;
     scene.add(im);
     return im;
   };
-  const whiteRefl = mkReflIm(0xfff2cf);
-  const redRefl = mkReflIm(0xff5a5a);
+  const whiteRefl = mkReflIm(0xfff2cf, nNorth);
+  const redRefl = mkReflIm(0xff5a5a, cars.length - nNorth);
   const _m4 = new THREE.Matrix4();
   const _q = new THREE.Quaternion();
+  const qSouth = new THREE.Quaternion().setFromAxisAngle(UP, Math.PI);
   const _sc = new THREE.Vector3(13, 1, 1.7);
   const _p = new THREE.Vector3();
+  const _one = new THREE.Vector3(1, 1, 1);
   updaters.push((t) => {
-    for (let i = 0; i < roadDots.length; i++) {
-      const d = roadDots[i];
-      const side = d.rx < (x0 + x1) / 2 ? -1 : 1; // 서안/동안
-      const reflX = side < 0 ? x0 + 8.5 : x1 - 8.5;
-      const q = side < 0 ? flipQ : _q.identity();
-      const dz = (t * d.spd + d.off) % span;
-      _m4.makeTranslation(d.rx - 2.3, 0.55, zBase + dz);          // 북행(흰 점)
-      whiteIm.setMatrixAt(i, _m4);
-      _m4.compose(_p.set(reflX, 0.43, zBase + dz), q, _sc);
-      whiteRefl.setMatrixAt(i, _m4);
-      _m4.makeTranslation(d.rx + 2.3, 0.55, zBase + span - dz);   // 남행(붉은 점)
-      redIm.setMatrixAt(i, _m4);
-      _m4.compose(_p.set(reflX, 0.43, zBase + span - dz), q, _sc);
-      redRefl.setMatrixAt(i, _m4);
+    let wi = 0, ri = 0;
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      const dz = (t * c.spd + (c.off % c.L) + c.L) % c.L;
+      const z = c.dir > 0 ? c.run.z0 + 15 + dz : c.run.z1 - 15 - dz;
+      const x = c.run.rx - c.dir * c.lane; // 우측통행: 북행(+z)이 -x측(서측)
+      _m4.compose(_p.set(x, 0.01, z), c.dir > 0 ? _q.identity() : qSouth, _one);
+      bodyIm.setMatrixAt(i, _m4);
+      headIm.setMatrixAt(i, _m4);
+      tailIm.setMatrixAt(i, _m4);
+      const reflX = c.run.side < 0 ? x0 + 8.5 : x1 - 8.5;
+      const rq = c.run.side < 0 ? flipQ : _q.identity();
+      _m4.compose(_p.set(reflX, 0.43, z), rq, _sc);
+      if (c.dir > 0) whiteRefl.setMatrixAt(wi++, _m4);
+      else redRefl.setMatrixAt(ri++, _m4);
     }
-    whiteIm.instanceMatrix.needsUpdate = true;
-    redIm.instanceMatrix.needsUpdate = true;
+    bodyIm.instanceMatrix.needsUpdate = true;
+    headIm.instanceMatrix.needsUpdate = true;
+    tailIm.instanceMatrix.needsUpdate = true;
     whiteRefl.instanceMatrix.needsUpdate = true;
     redRefl.instanceMatrix.needsUpdate = true;
   });
@@ -1641,8 +1756,11 @@ function buildBridgeArches(scene, samples, river, parapetOffset) {
       const h0 = Math.sin((k / SEG) * Math.PI) * ARCH_H;
       const h1 = Math.sin(((k + 1) / SEG) * Math.PI) * ARCH_H;
       for (const side of [-1, 1]) {
-        const p0 = smp0.pos.clone().addScaledVector(smp0.left, off * side).add(new THREE.Vector3(0, h0, 0));
-        const p1 = smp1.pos.clone().addScaledVector(smp1.left, off * side).add(new THREE.Vector3(0, h1, 0));
+        // 서단(마지막 스팬) 우측 리브는 진출차로(증설 차선) 회랑을 관통하므로 바깥으로.
+        // 스팬 경계는 기부(h=0)라 옆 스팬과의 어긋남이 티 나지 않는다.
+        const o2 = a === SPANS - 1 && side === 1 ? off + 2.9 : off;
+        const p0 = smp0.pos.clone().addScaledVector(smp0.left, o2 * side).add(new THREE.Vector3(0, h0, 0));
+        const p1 = smp1.pos.clone().addScaledVector(smp1.left, o2 * side).add(new THREE.Vector3(0, h1, 0));
         const mid = p0.clone().add(p1).multiplyScalar(0.5);
         const d = p1.clone().sub(p0);
         const hDist = Math.hypot(d.x, d.z);
@@ -1661,7 +1779,8 @@ function buildBridgeArches(scene, samples, river, parapetOffset) {
       // 행어(아치→데크 세로 케이블)
       if (k > 0 && k % 2 === 0 && h0 > 2.5) {
         for (const side of [-1, 1]) {
-          const base = smp0.pos.clone().addScaledVector(smp0.left, off * side);
+          const oH = a === SPANS - 1 && side === 1 ? off + 2.9 : off;
+          const base = smp0.pos.clone().addScaledVector(smp0.left, oH * side);
           hangerMats.push(new THREE.Matrix4().compose(
             base.add(new THREE.Vector3(0, h0 / 2, 0)),
             new THREE.Quaternion(),

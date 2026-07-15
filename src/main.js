@@ -1,5 +1,5 @@
-// 화면 전환 및 전체 흐름 오케스트레이션
-// (사진 기능 제거됨 — 야간 도심 팔레트를 시드 난수로 생성. 퀴즈 기능은 추후 추가)
+// 화면 전환 및 전체 흐름 오케스트레이션:
+// 시작(싱글/멀티 로비) → 차량 선택 → 맵 생성(시드) → 주행 → 결과(순위표/재대결)
 
 import { Game } from './game/game.js';
 import { loadGameAssets } from './utils/assets.js';
@@ -45,6 +45,13 @@ const CARS = [
     name: '팬텀 570',
     tag: '미드십 슈퍼카 · 대형 리어윙 에어로킷',
     color: '#7a7e85',
+  },
+  {
+    id: 'car7',
+    model: 'car7',
+    name: '918 스파이더',
+    tag: '하이브리드 하이퍼카 · 실사 모델 (CC-BY)',
+    color: '#c8ccd4',
   },
 ];
 
@@ -123,7 +130,8 @@ async function setGenStep(label, from, to, detail = '') {
   $('#gen-progress').style.width = `${to}%`;
 }
 
-async function generateAndPlay() {
+// seedOverride: "같은 맵 다시"(시드 재사용) / rematchInfo: 재대결 소켓 인계 { net, ids, host }
+async function generateAndPlay(seedOverride = null, rematchInfo = null) {
   disposePreviews(); // 선택 화면 프리뷰 컨텍스트 정리
   showScreen('#screen-generating');
 
@@ -135,13 +143,26 @@ async function generateAndPlay() {
   await setGenStep('야경 배치 중…', 70, 100, '강 건너 도시에 불을 켜는 중');
   await new Promise((r) => setTimeout(r, 350));
 
-  const seed = new URLSearchParams(location.search).get('seed') || String(Date.now());
-  // 시간대: 시드 기반으로 밤/노을이 섞여 나온다 (?tod=dusk|night 로 강제 가능)
+  // 시드 결정: 멀티는 방 코드가 곧 시드(재대결 포함), 싱글은 "같은 맵 다시" 재사용 →
+  // 개발용 ?seed= 최초 진입 → 그 외엔 매번 새 도시
+  const q = new URLSearchParams(location.search);
+  let seed;
+  if (q.get('room')) seed = q.get('seed');
+  else if (seedOverride) seed = seedOverride;
+  else if (!state.lastSeed && q.get('seed')) seed = q.get('seed');
+  else seed = String(Date.now());
+  state.lastSeed = seed;
+  // 시간대: 시드 기반으로 밤/노을이 섞여 나온다 (?tod=dusk|night 로 강제 가능) —
+  // 같은 시드 = 같은 시간대라 "같은 맵 다시"에서도 분위기가 그대로 재현된다
   const prng = createRng(seed + '::palette');
-  const todParam = new URLSearchParams(location.search).get('tod');
+  const todParam = q.get('tod');
   const dusk = todParam ? todParam === 'dusk' : prng() < 0.45;
   const palette = dusk ? duskCityPalette(prng) : nightCityPalette(prng);
-  startGame(seed, palette);
+  // 비 날씨: 밤에만 시드 확률 ~25% (?wx=rain|clear 강제). 팔레트 난수 소비 뒤에
+  // 뽑아야 기존 시드들의 색감이 안 바뀐다. 같은 시드 = 같은 날씨(멀티 동기화)
+  const wxParam = q.get('wx');
+  palette.rain = !dusk && (wxParam ? wxParam === 'rain' : prng() < 0.25);
+  startGame(seed, palette, rematchInfo);
 }
 
 // ---------- 게임 ----------
@@ -151,16 +172,56 @@ function formatTime(sec) {
   return `${m}:${s}`;
 }
 
-function startGame(seed, palette) {
+// XSS 방지: 닉네임 등 사용자 입력을 innerHTML에 넣기 전 이스케이프
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// 멀티 순위표: 완주(기록순) → 미완주(사고/주행중, 진행률순). 라이브 갱신됨
+function renderStandings(rows) {
+  const el = $('#result-ranks');
+  el.innerHTML = rows.map((r, i) => {
+    const rec = r.time !== null ? formatTime(r.time)
+      : r.crashed ? `사고 (${Math.round(r.progress * 100)}%)`
+      : `주행중 ${Math.round(r.progress * 100)}%`;
+    return `<div class="rr-row${r.me ? ' rr-me' : ''}">
+      <span class="rr-rank">${i + 1}</span>
+      <span class="rr-name">${escapeHtml(r.name)}${r.me ? ' <em>(나)</em>' : ''}</span>
+      <span class="rr-rec">${rec}</span>
+    </div>`;
+  }).join('');
+}
+
+// 결과 화면 버튼 구성: 싱글=같은 맵/새 도시, 멀티=재대결
+function configureResultButtons(isMulti) {
+  $('#btn-rematch').classList.toggle('hidden', !isMulti);
+  $('#btn-same').classList.toggle('hidden', isMulti);
+  $('#btn-restart').classList.toggle('hidden', isMulti);
+  $('#result-ranks').classList.toggle('hidden', !isMulti);
+  const b = $('#btn-rematch');
+  b.disabled = false;
+  b.textContent = '재대결';
+}
+
+function startGame(seed, palette, rematchInfo = null) {
   showScreen('#screen-game');
   $('#hud').classList.remove('hidden');
 
   state.game?.dispose();
 
   const ui = {
-    onHud({ speed, progress, time, avg, boosting, boostGauge, flash }) {
+    onHud({ speed, progress, time, avg, boosting, boostGauge, flash, rank, racers }) {
       $('#hud-speed').textContent = speed;
-      $('#hud-lap').textContent = `${Math.round((progress || 0) * 100)}%`;
+      $('#hud-progress').textContent = `${Math.round((progress || 0) * 100)}%`;
+      // 멀티 순위 (피어가 있을 때만 표시)
+      const ri = $('#hud-rank-item');
+      if (rank) {
+        ri.style.display = '';
+        $('#hud-rank').textContent = `${rank}/${racers}`;
+      } else {
+        ri.style.display = 'none';
+      }
       $('#hud-time').textContent = formatTime(time);
       $('#hud-score').textContent = Math.round(avg || 0);
       $('#boost-indicator').classList.toggle('hidden', !boosting);
@@ -177,8 +238,6 @@ function startGame(seed, palette) {
         nm.classList.add('hidden');
       }
     },
-    onLap() {},
-    onBoost() {},
     onCountdown(text) {
       const el = $('#countdown');
       if (text === null) {
@@ -194,6 +253,12 @@ function startGame(seed, palette) {
       $('#result-time').textContent = formatTime(result.totalTime);
       $('#result-best').textContent = `${Math.round(result.maxSpeed)} km/h`;
       $('#result-score').textContent = `${result.avgSpeed.toFixed(1)} km/h`;
+      const isMulti = !!state.game?.net;
+      configureResultButtons(isMulti);
+      if (isMulti) {
+        renderStandings(state.game.getStandings());
+        state.game.checkRematch(); // 상대가 먼저 재대결을 눌렀으면 카운터 표시
+      }
       setTimeout(() => showScreen('#screen-result'), 1200);
     },
     // 충돌 1회 = 사고 → 즉시 실패 (현실성)
@@ -206,31 +271,173 @@ function startGame(seed, palette) {
       $('#result-time').textContent = formatTime(result.totalTime);
       $('#result-best').textContent = `${Math.round(result.maxSpeed)} km/h`;
       $('#result-score').textContent = `${result.avgSpeed.toFixed(1)} km/h`;
+      const isMulti = !!state.game?.net;
+      configureResultButtons(isMulti);
+      if (isMulti) {
+        renderStandings(state.game.getStandings());
+        state.game.checkRematch(); // 상대가 먼저 재대결을 눌렀으면 카운터 표시
+      }
       setTimeout(() => {
         cd.classList.add('hidden');
         showScreen('#screen-result');
       }, 1500);
     },
+    // 결과 화면 순위표 라이브 갱신(상대 완주/사고/진행률이 계속 들어온다)
+    onStandings(rows) {
+      renderStandings(rows);
+    },
+    // 재대결 준비 인원 변동 → 버튼 라벨로 표시
+    onRematch({ ready, total }) {
+      const b = $('#btn-rematch');
+      if (b.disabled) b.textContent = `재대결 대기중 (${ready}/${total})`;
+      else if (ready > 0) b.textContent = `재대결 (${ready}/${total} 준비됨)`;
+    },
+    // 전원 준비 완료 → 소켓을 인계해 같은 방·시드로 재시작.
+    // 리빌드 창(구 게임 dispose ~ 새 setupNet)에 오는 host 승계/go는 여기 브릿지가 담아둔다
+    onRematchGo(info) {
+      info.net.on('host', (m) => { info.host = m.id === info.net.id; });
+      info.net.on('go', (m) => { info.goAt = m.at; });
+      info.net.on('left', (m) => { info.ids = info.ids.filter((id) => id !== m.id); });
+      generateAndPlay(null, info);
+    },
   };
 
-  const game = new Game($('#game-container'), palette, ui, { carModel: state.selectedCar });
+  const game = new Game($('#game-container'), palette, ui, {
+    carModel: state.selectedCar,
+    hardMode: $('#opt-hard').checked,
+    traffic: $('#opt-traffic').checked,
+    rematch: rematchInfo,
+  });
   state.game = game;
   game.build(seed);
   game.start();
 }
 
+// ---------- 게임 설정 토글 (localStorage 유지) ----------
+for (const [id, key] of [['#opt-hard', 'nd_hard'], ['#opt-traffic', 'nd_traffic']]) {
+  const el = $(id);
+  const saved = localStorage.getItem(key);
+  if (saved !== null) el.checked = saved === '1';
+  el.addEventListener('change', () => localStorage.setItem(key, el.checked ? '1' : '0'));
+}
+
+// ---------- 멀티플레이 로비 ----------
+// 방 코드 = 맵 시드: 같은 코드로 접속하면 같은 맵·시간대가 결정적으로 재현된다.
+// URL 파라미터(room/host/seed/name)를 리로드 없이 심고 기존 흐름(차량 선택→주행)을 탄다.
+function enterMultiplayer(code, isHost) {
+  const nick = ($('#mp-name').value || '').trim().slice(0, 8);
+  const url = new URL(location.href);
+  url.searchParams.set('room', code);
+  url.searchParams.set('seed', code);
+  if (isHost) url.searchParams.set('host', '1');
+  else url.searchParams.delete('host');
+  if (nick) url.searchParams.set('name', nick);
+  history.replaceState(null, '', url);
+  showCarSelect();
+}
+
+function newRoomCode() {
+  // 헷갈리는 글자(0/O, 1/I) 제외한 5자리 코드
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+// 로비 조회: 짧은 일회성 소켓으로 방 목록을 받아온다 (실패 시 null)
+function fetchRooms() {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; try { ws.close(); } catch { /* noop */ } resolve(v); } };
+    let ws;
+    try { ws = new WebSocket(`ws://${location.hostname}:8787`); } catch { resolve(null); return; }
+    const to = setTimeout(() => finish(null), 2500);
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'lobby' }));
+    ws.onerror = () => { clearTimeout(to); finish(null); };
+    ws.onmessage = (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.t === 'rooms') { clearTimeout(to); finish(m.list); }
+    };
+  });
+}
+
+async function loadRoomList() {
+  const box = $('#mp-rooms');
+  box.innerHTML = '<div class="mp-empty">불러오는 중…</div>';
+  const list = await fetchRooms();
+  if (list === null) {
+    box.innerHTML = '<div class="mp-empty">서버 연결 실패 — relay 서버(npm run relay)를 확인하세요</div>';
+    return null;
+  }
+  const waiting = list.filter((r) => !r.racing && r.n > 0);
+  if (!waiting.length) {
+    box.innerHTML = '<div class="mp-empty">대기 중인 방이 없습니다 — 방을 만들어보세요</div>';
+  } else {
+    box.innerHTML = waiting.map((r) =>
+      `<button class="mp-room" data-code="${r.code}" type="button">
+        <span class="mp-room-code">${r.code}</span><span class="mp-room-n">${r.n}명 대기중</span>
+      </button>`).join('');
+    box.querySelectorAll('.mp-room').forEach((el) => {
+      el.addEventListener('click', () => enterMultiplayer(el.dataset.code, false));
+    });
+  }
+  return waiting;
+}
+
+$('#btn-multi').addEventListener('click', () => {
+  // 모드 선택 버튼을 멀티 패널로 교체 (뒤로가기로 복귀)
+  document.querySelector('.start-btns').classList.add('hidden');
+  $('#mp-panel').classList.remove('hidden');
+  loadRoomList();
+});
+$('#btn-mp-back').addEventListener('click', () => {
+  $('#mp-panel').classList.add('hidden');
+  document.querySelector('.start-btns').classList.remove('hidden');
+});
+$('#btn-mp-refresh').addEventListener('click', () => loadRoomList());
+$('#btn-mp-create').addEventListener('click', () => enterMultiplayer(newRoomCode(), true));
+$('#btn-mp-quick').addEventListener('click', async () => {
+  // 빠른 모드: 대기 중인 방이 있으면 첫 방에 참가, 없으면 방장으로 새 방 개설
+  const waiting = await loadRoomList();
+  if (waiting === null) return; // 서버 연결 실패
+  if (waiting.length) enterMultiplayer(waiting[0].code, false);
+  else enterMultiplayer(newRoomCode(), true);
+});
+
+// 싱글 시작·메뉴 복귀 시 멀티 파라미터 제거(잔류하면 다음 판이 멀티로 붙는다)
+function clearMpParams() {
+  const url = new URL(location.href);
+  // 방 코드 시드가 남으면 이후 싱글이 계속 같은 맵으로 고정된다
+  if (url.searchParams.has('room')) url.searchParams.delete('seed');
+  url.searchParams.delete('room');
+  url.searchParams.delete('host');
+  url.searchParams.delete('name');
+  history.replaceState(null, '', url);
+}
+
 // ---------- 이벤트 바인딩 ----------
-$('#btn-start').addEventListener('click', () => showCarSelect());
+$('#btn-start').addEventListener('click', () => { clearMpParams(); showCarSelect(); });
 $('#btn-select-back').addEventListener('click', () => {
   disposePreviews();
   showScreen('#screen-start');
 });
 $('#btn-select-confirm').addEventListener('click', () => generateAndPlay());
-$('#btn-restart').addEventListener('click', () => generateAndPlay()); // 같은 차량으로 재시작
+$('#btn-restart').addEventListener('click', () => generateAndPlay()); // 새 시드 = 새로운 도시
+$('#btn-same').addEventListener('click', () => generateAndPlay(state.lastSeed)); // 시드 재사용
+$('#btn-rematch').addEventListener('click', () => {
+  const g = state.game;
+  if (!g?.net) return;
+  const b = $('#btn-rematch');
+  b.disabled = true;
+  b.textContent = '상대 대기중…';
+  g.requestRematch(); // 전원 준비되면 ui.onRematchGo로 재시작
+});
 $('#btn-menu').addEventListener('click', () => {
   state.game?.dispose();
   state.game = null;
   disposePreviews();
+  clearMpParams();
   showScreen('#screen-start');
 });
 

@@ -1,7 +1,7 @@
-// 시드 기반 난수 유틸. 동일 사진 세트로도 매번 다른 맵을 만들기 위해
-// (사진 해시 + 생성 시각)을 시드로 사용한다. (명세 1.2.4 변형 엔진)
+// 시드 기반 난수 유틸 — 같은 시드 문자열이면 항상 같은 수열(맵 결정성의 근간).
+// 멀티플레이는 방 코드를 시드로 써서 전원이 동일한 맵을 재현한다.
 
-export function hashString(str) {
+function hashString(str) {
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);
@@ -10,7 +10,7 @@ export function hashString(str) {
   return h >>> 0;
 }
 
-export function mulberry32(seed) {
+function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
     a |= 0;

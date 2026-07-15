@@ -12,7 +12,45 @@
     <div class="start-wrap">
       <h1 class="logo">NIGHT DRIVE</h1>
       <p class="tagline">강 건너 야경을 끼고 달리는 고가도로 나이트 드라이브.</p>
-      <button id="btn-start" class="btn btn-primary btn-big" type="button">주행 시작</button>
+      <div class="start-btns">
+        <button id="btn-start" class="btn btn-primary btn-big" type="button">싱글플레이</button>
+        <button id="btn-multi" class="btn btn-secondary btn-big" type="button">멀티플레이</button>
+      </div>
+      <!-- 게임 설정 (localStorage에 저장) -->
+      <div class="opt-row">
+        <label class="opt">
+          <input type="checkbox" id="opt-hard" checked />
+          하드모드 <span class="opt-sub">차량 충돌 = 즉시 사고</span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" id="opt-traffic" checked />
+          교통 차량
+        </label>
+      </div>
+      <!-- 멀티플레이 로비: 방 코드 = 맵 시드 (같은 코드 = 같은 맵) -->
+      <div id="mp-panel" class="mp-wrap hidden">
+        <div class="mp-head">
+          <button id="btn-mp-back" class="mp-refresh" type="button">← 뒤로</button>
+          <span class="mp-head-title">멀티플레이</span>
+          <span class="mp-head-pad"></span>
+        </div>
+        <div class="mp-row">
+          <input id="mp-name" class="mp-input" maxlength="8" placeholder="닉네임" autocomplete="off" />
+          <button id="btn-mp-quick" class="btn btn-primary" type="button">빠른 모드</button>
+          <button id="btn-mp-create" class="btn btn-secondary" type="button">방 만들기</button>
+        </div>
+        <div class="mp-list-head">
+          <span>대기 중인 방</span>
+          <button id="btn-mp-refresh" class="mp-refresh" type="button">새로고침</button>
+        </div>
+        <div id="mp-rooms" class="mp-rooms"><div class="mp-empty">불러오는 중…</div></div>
+      </div>
+      <p class="credits">콕핏 인테리어: "Car interior" by Gerhald —
+        <a href="https://sketchfab.com/3d-models/car-interior-c5f830a811af4917972de8fa47949de9"
+           target="_blank" rel="noopener">Sketchfab</a> (CC BY 4.0) ·
+        "Porsche 918 Spyder 2015" by 3D Cars Studio —
+        <a href="https://sketchfab.com/3d-models/porsche-918-spyder-2015-b8d069b411804e43bccccd2e9e6fc1e7"
+           target="_blank" rel="noopener">Sketchfab</a> (CC BY 4.0)</p>
     </div>
   </section>
 
@@ -43,7 +81,9 @@
     <div id="game-container"></div>
     <div id="hud" class="hud hidden">
       <div class="hud-top">
-        <div class="hud-item"><span class="hud-label">진행</span><span id="hud-lap">0%</span></div>
+        <div class="hud-item" id="hud-rank-item" style="display:none">
+          <span class="hud-label">순위</span><span id="hud-rank">-</span></div>
+        <div class="hud-item"><span class="hud-label">진행</span><span id="hud-progress">0%</span></div>
         <div class="hud-item"><span class="hud-label">TIME</span><span id="hud-time">0:00.0</span></div>
         <div class="hud-item"><span class="hud-label">평균 km/h</span><span id="hud-score">0</span></div>
       </div>
@@ -55,7 +95,7 @@
       <div id="nearmiss" class="nearmiss hidden"></div>
     </div>
     <div id="countdown" class="countdown hidden"></div>
-    <div class="controls-hint">↑↓←→ / WASD 로 운전 · Shift 드리프트 · C 시점 전환</div>
+    <div class="controls-hint">↑↓←→ / WASD 로 운전 · Shift 드리프트 · F 상향등 · C 시점 전환</div>
   </section>
 
   <!-- 4. 결과 화면 -->
@@ -68,9 +108,13 @@
         <div class="result-row"><span>총 기록</span><strong id="result-time">-</strong></div>
         <div class="result-row"><span>최고 속도</span><strong id="result-best">-</strong></div>
       </div>
+      <!-- 멀티 순위표: 완주 시각순 → 미완주(사고/주행중)는 진행률순. 라이브 갱신 -->
+      <div id="result-ranks" class="result-ranks hidden"></div>
       <div class="result-btns">
-        <button id="btn-restart" class="btn btn-primary" type="button">새로운 도시로 다시</button>
-        <button id="btn-menu" class="btn btn-secondary" type="button">메뉴로</button>
+        <button id="btn-rematch" class="btn btn-primary hidden" type="button">재대결</button>
+        <button id="btn-same" class="btn btn-primary" type="button">같은 맵 다시</button>
+        <button id="btn-restart" class="btn btn-secondary" type="button">새로운 도시로 다시</button>
+        <button id="btn-menu" class="btn btn-ghost" type="button">메뉴로</button>
       </div>
     </div>
   </section>

@@ -1,159 +1,179 @@
-// 1인칭 콕핏 (좌핸들 운전석 뷰) — Blender 제작 GLB 셸 + 런타임 화면/거울.
-// 셸(대시·비나클·핸들·필러·루프·도어·미러 하우징)은 cockpit.glb,
-// 화면류는 UV/flipY 함정을 피해 런타임 THREE 평면으로 얹는다:
-//   계기판(속도 바늘 캔버스) / 내비(정적 캔버스) / 사이드·룸미러(후방 렌더타깃).
+// 1인칭 콕핏 (좌핸들 운전석 뷰) — Sketchfab GLB 셸 + 런타임 화면/거울.
+// 변형 2종: 'sf' XJ220 인테리어(CC-BY, Gerhald) / '918' 포르쉐 918(CC-BY, 3D Cars Studio).
+// 기본값: 선택 차량이 car7(918)이면 '918', 아니면 'sf'. ?cockpit=sf|918 로 강제.
+// 계기판·내비는 런타임 캔버스(918은 순정 발광 계기판 사용), 거울은 후방 렌더타깃:
+//   918 = 순정 거울 메시의 UV를 평면 투영으로 재계산해 RT를 거울 모양에 정확히 맞춤.
+//   sf  = 하우징 면에 맞춘 오버레이 평면.
 // 좌표계: 차 전방 = 로컬 +Z, 로컬 +X = 차의 왼쪽(주의!). 운전석 X=+0.45.
-// 1인칭 카메라는 로컬 (0.45, 1.42, 0.55) — 게임 카메라(game.js FP)와 일치해야 함.
+// 1인칭 카메라는 반환값 eye 로컬 오프셋 — game.js FP 카메라가 이를 사용한다.
 
 import * as THREE from 'three';
 import { instantiate } from '../utils/assets.js';
 
 const MIRROR_W = 256, MIRROR_H = 128;
-const DX = 0.45;          // 운전석 좌측 오프셋
-const WHEEL_TILT = -0.5;  // 스티어링 칼럼 기울기(상단이 운전자 쪽)
+const DX = 0.45; // 운전석 좌측 오프셋
 
-export function buildCockpit() {
+// 거울 메시 UV 재계산: 정점을 평균법선의 접평면에 투영해 0..1로 정규화 —
+// 렌더타깃이 거울 유리 모양 그대로 채워진다 (원본 UV는 0..1 아니라 못 씀)
+function remapMirrorUVs(mesh) {
+  const g = mesh.geometry;
+  if (g.userData.ckMirrorUV) return; // 클론 간 지오메트리 공유 — 1회만
+  g.userData.ckMirrorUV = true;
+  const pos = g.attributes.position;
+  const nor = g.attributes.normal;
+  const n = new THREE.Vector3();
+  const tmp = new THREE.Vector3();
+  for (let i = 0; i < nor.count; i++) n.add(tmp.fromBufferAttribute(nor, i));
+  n.normalize();
+  const up = Math.abs(n.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const t = new THREE.Vector3().crossVectors(up, n).normalize(); // 수평 접선
+  const b = new THREE.Vector3().crossVectors(n, t);              // 수직 접선
+  const us = new Float32Array(pos.count);
+  const vs = new Float32Array(pos.count);
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    tmp.fromBufferAttribute(pos, i);
+    const u = tmp.dot(t), v = tmp.dot(b);
+    us[i] = u; vs[i] = v;
+    if (u < minU) minU = u; if (u > maxU) maxU = u;
+    if (v < minV) minV = v; if (v > maxV) maxV = v;
+  }
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uv[i * 2] = (us[i] - minU) / (maxU - minU || 1);
+    uv[i * 2 + 1] = (vs[i] - minV) / (maxV - minV || 1);
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+}
+
+export function buildCockpit(carModel = 'car2') {
   const group = new THREE.Group();
   group.visible = false;
 
-  // ── GLB 셸: 야간 장면광이 약해도 톤이 살도록 자체 발광을 약하게 섞는다 ──
-  const model = instantiate('cockpit');
-  model.traverse((o) => {
-    if (!o.isMesh) return;
-    o.castShadow = false;
-    const m = o.material;
-    if (m?.name && m.name.startsWith('Ck') && m.name !== 'CkAmber' && !m.userData.ckGlow) {
-      m.emissive.copy(m.color).multiplyScalar(1);
-      m.emissiveIntensity = 0.22;
-      m.userData.ckGlow = true; // 캐시 원본 공유 — 중복 적용 방지
-    }
-  });
-  group.add(model);
+  const param = new URLSearchParams(location.search).get('cockpit');
+  const variant = ['sf', '918'].includes(param) ? param : (carModel === 'car7' ? '918' : 'sf');
+  const is918 = variant === '918';
+  const WHEEL_TILT = is918 ? -0.5 : -0.42; // 칼럼 각도(XJ220 원래 각 ≈24°)
+  // 눈 위치(로컬): 918은 시트포지션이 낮은 로드스터
+  const eye = is918 ? { x: DX, y: 1.02, z: 0.34 } : { x: DX, y: 1.42, z: 0.55 };
 
-  // 센터스택(하우징·송풍구·공조)이 카메라에서 0.47m — 너무 가까워 화면을 압도한다.
-  // 익스포트가 버텍스에 위치를 굽지만 노드는 남아 있으므로 노드 오프셋으로 밀어넣는다.
-  const STACK_PARTS = ['CkStackHousing', 'CkStackBezel', 'CkVentF', 'CkVentB',
-    'CkSlat', 'CkClimate', 'CkAmberDisp', 'CkKnob'];
-  model.traverse((o) => {
-    if (STACK_PARTS.some((p) => o.name.startsWith(p))) {
-      o.position.y -= 0.05;
-      o.position.z += 0.24;
-    }
-  });
-
-  // 핸들: 로드 시 recenterPivot으로 허브 피벗 복원됨(assets.js).
-  // 기울기(x)와 조향(z)을 오일러 XYZ 하나로 — X(기울기)·Z(스핀) 순서라 축이 맞는다.
-  const wheelSpin = model.getObjectByName('WheelSpin');
-  if (wheelSpin) wheelSpin.rotation.set(WHEEL_TILT, 0, 0);
-
-  // ── 계기판: 아날로그 게이지 캔버스(비나클 안) — drawCluster를 주기 호출 ──
-  const cCv = document.createElement('canvas');
-  cCv.width = 256; cCv.height = 96;
-  const cCtx = cCv.getContext('2d');
-  const clusterTex = new THREE.CanvasTexture(cCv);
-  clusterTex.colorSpace = THREE.SRGBColorSpace; // 미지정 시 어두운 색이 뿌옇게 뜬다
-  const gauge = (cx, cy, r, frac) => {
-    cCtx.beginPath();
-    cCtx.arc(cx, cy, r, 0, Math.PI * 2);
-    cCtx.fillStyle = 'rgba(14,16,21,0.97)';
-    cCtx.fill();
-    cCtx.strokeStyle = 'rgba(215,222,235,0.55)';
-    cCtx.lineWidth = 2.5;
-    cCtx.stroke();
-    cCtx.strokeStyle = 'rgba(215,222,235,0.5)';
-    cCtx.lineWidth = 1.5;
-    for (let k = 0; k <= 8; k++) {
-      const a = ((135 + (270 * k) / 8) * Math.PI) / 180;
-      cCtx.beginPath();
-      cCtx.moveTo(cx + Math.cos(a) * r * 0.8, cy + Math.sin(a) * r * 0.8);
-      cCtx.lineTo(cx + Math.cos(a) * r * 0.94, cy + Math.sin(a) * r * 0.94);
-      cCtx.stroke();
-    }
-    const a = ((135 + 270 * Math.min(1, Math.max(0, frac))) * Math.PI) / 180;
-    cCtx.strokeStyle = '#ff4038';
-    cCtx.lineWidth = 2.5;
-    cCtx.beginPath();
-    cCtx.moveTo(cx, cy);
-    cCtx.lineTo(cx + Math.cos(a) * r * 0.74, cy + Math.sin(a) * r * 0.74);
-    cCtx.stroke();
-    cCtx.fillStyle = '#e8ecf4';
-    cCtx.beginPath();
-    cCtx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-    cCtx.fill();
-  };
-  const drawCluster = (kmh) => {
-    cCtx.clearRect(0, 0, 256, 96);
-    cCtx.fillStyle = 'rgba(6,8,12,0.95)';
-    cCtx.fillRect(0, 6, 256, 84);
-    gauge(96, 48, 38, kmh / 220);                     // 속도계
-    gauge(178, 48, 38, Math.min(1, kmh / 190) * 0.9); // 타코(속도 연동 연출)
-    gauge(28, 48, 16, 0.62);                          // 연료
-    gauge(240, 48, 16, 0.45);                         // 수온
-    cCtx.fillStyle = 'rgba(200,230,255,0.85)';
-    cCtx.textAlign = 'center';
-    cCtx.font = 'bold 13px sans-serif';
-    cCtx.fillText(String(kmh), 96, 76);
-    clusterTex.needsUpdate = true;
-  };
-  drawCluster(0);
-  const cluster = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.36, 0.135),
-    new THREE.MeshBasicMaterial({ map: clusterTex, transparent: true })
-  );
-  cluster.position.set(DX, 1.185, 1.01); // 비나클 후드 안
-  cluster.rotation.set(0.3, Math.PI, 0);
-  group.add(cluster);
-
-  // ── 내비 화면: 센터스택 하우징 위 (지도 캔버스 — 색 포인트) ──
-  const sCv = document.createElement('canvas');
-  sCv.width = 192; sCv.height = 96;
-  const sCtx = sCv.getContext('2d');
-  sCtx.fillStyle = '#0a1526';
-  sCtx.fillRect(0, 0, 192, 96);
-  sCtx.strokeStyle = '#22314a';
-  sCtx.lineWidth = 1.5;
-  for (let gx = 0; gx < 192; gx += 24) { sCtx.beginPath(); sCtx.moveTo(gx, 0); sCtx.lineTo(gx, 96); sCtx.stroke(); }
-  for (let gy = 0; gy < 96; gy += 24) { sCtx.beginPath(); sCtx.moveTo(0, gy); sCtx.lineTo(192, gy); sCtx.stroke(); }
-  sCtx.strokeStyle = '#4fd8c8';
-  sCtx.lineWidth = 4;
-  sCtx.beginPath(); sCtx.moveTo(20, 84); sCtx.quadraticCurveTo(90, 60, 176, 22); sCtx.stroke();
-  sCtx.strokeStyle = '#e8a13c';
-  sCtx.lineWidth = 2.5;
-  sCtx.beginPath(); sCtx.moveTo(8, 40); sCtx.lineTo(150, 78); sCtx.stroke();
-  sCtx.fillStyle = '#5fb4ff';
-  sCtx.beginPath(); sCtx.arc(96, 62, 5, 0, Math.PI * 2); sCtx.fill();
-  sCtx.fillStyle = 'rgba(150,200,255,0.8)';
-  sCtx.font = 'bold 11px sans-serif';
-  sCtx.textAlign = 'left';
-  sCtx.fillText('올림픽대로', 104, 56);
-  const navTex = new THREE.CanvasTexture(sCv);
-  navTex.colorSpace = THREE.SRGBColorSpace;
-  const nav = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.42, 0.24),
-    new THREE.MeshBasicMaterial({ map: navTex })
-  );
-  nav.position.set(0, 1.19, 1.235); // 스택 하우징(노드 오프셋 후) 표면
-  nav.rotation.set(0.21, Math.PI, 0);
-  group.add(nav);
-
-  // ── 미러: 후방 카메라 1대를 렌더타깃에 그려 두 거울이 공유 ──
+  // ── 미러 렌더타깃: 후방 카메라 1대를 거울들이 공유 ──
   const rt = new THREE.WebGLRenderTarget(MIRROR_W, MIRROR_H);
   rt.texture.wrapS = THREE.RepeatWrapping;
   rt.texture.repeat.x = -1; // 거울 좌우 반전
   const rearCam = new THREE.PerspectiveCamera(60, MIRROR_W / MIRROR_H, 0.5, 900);
   const mirrorMat = new THREE.MeshBasicMaterial({ map: rt.texture });
 
-  // 좌측 사이드미러 거울면: CkSideMirror 하우징(1.16, 1.27, 1.30) 뒷면
-  const sideGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.12), mirrorMat);
-  sideGlass.position.set(1.15, 1.27, 1.245);
-  sideGlass.rotation.y = Math.PI + 0.3; // 운전자 쪽으로
-  group.add(sideGlass);
+  // ── GLB 셸 ──
+  const model = instantiate(is918 ? 'cockpit918' : 'cockpitSf');
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = false;
+    const apply = (m) => {
+      if (!m?.name) return m;
+      // XJ220 셸(Ck*): 야간에도 톤이 살게 자기색 발광.
+      // 루프/패널 법선이 바깥(위)을 향해 실내에서 뚫려 보인다 → 양면 렌더
+      // (Blender는 기본 양면이라 검증 렌더에선 안 보였던 함정)
+      if (m.name.startsWith('Ck') && !m.userData.ckGlow) {
+        m.emissive.copy(m.color);
+        m.emissiveIntensity = 0.22;
+        m.side = THREE.DoubleSide;
+        m.userData.ckGlow = true; // 캐시 원본 공유 — 중복 적용 방지
+      }
+      // 거울 유리(두 변형 공통, sf는 유리면을 GLB에서 분리해둠) →
+      // UV 재계산 후 렌더타깃 — 거울 모양에 딱 맞는 반사
+      // (우측 사이드미러는 만들었다가 사용자 합의로 제거 — 좌측+룸미러만)
+      if (m.name === 'Mirror' || m.name.startsWith('Mirror.')) {
+        remapMirrorUVs(o);
+        return mirrorMat;
+      }
+      // 918: 유리(alpha 0.75로 어두움) → 거의 투명하게
+      if (is918 && m.name.startsWith('Glass') && !m.userData.ckGlass) {
+        m.transparent = true;
+        m.opacity = 0.1;
+        m.depthWrite = false;
+        m.userData.ckGlass = true;
+      }
+      // 918: 검정 카본 실내가 밤에 완전히 죽지 않게 아주 약한 발광 플로어
+      if (is918 && !m.userData.ckLift && !m.emissiveMap
+        && m.emissive && m.emissive.getHex() === 0) {
+        m.emissive.setRGB(0.022, 0.024, 0.03);
+        m.userData.ckLift = true;
+      }
+      return m;
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(apply) : apply(o.material);
+  });
+  group.add(model);
 
-  // 룸미러 거울면: CkRoomMirror 하우징(0, 1.60, 1.15) 뒷면
-  const roomGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.10), mirrorMat);
-  roomGlass.position.set(0, 1.60, 1.122);
-  roomGlass.rotation.set(0.2, Math.PI, 0);
-  group.add(roomGlass);
+  // 핸들: 로드 시 recenterPivot으로 허브 피벗 복원됨(assets.js).
+  // 기울기(x)와 조향(z)을 오일러 XYZ 하나로 — X(기울기)·Z(스핀) 순서라 축이 맞는다.
+  const wheelSpin = model.getObjectByName('WheelSpin');
+  if (wheelSpin) wheelSpin.rotation.set(WHEEL_TILT, 0, 0);
 
-  return { group, wheelSpin, rt, rearCam, drawCluster };
+  // ── 계기판/내비 캔버스: sf 전용 (918은 순정 3-다이얼+LCD가 있음) ──
+  let drawCluster = () => {};
+  if (!is918) {
+    const cCv = document.createElement('canvas');
+    cCv.width = 256; cCv.height = 96;
+    const cCtx = cCv.getContext('2d');
+    const clusterTex = new THREE.CanvasTexture(cCv);
+    clusterTex.colorSpace = THREE.SRGBColorSpace; // 미지정 시 어두운 색이 뿌옇게 뜬다
+    const gauge = (cx, cy, r, frac) => {
+      cCtx.beginPath();
+      cCtx.arc(cx, cy, r, 0, Math.PI * 2);
+      cCtx.fillStyle = 'rgba(14,16,21,0.97)';
+      cCtx.fill();
+      cCtx.strokeStyle = 'rgba(215,222,235,0.55)';
+      cCtx.lineWidth = 2.5;
+      cCtx.stroke();
+      cCtx.strokeStyle = 'rgba(215,222,235,0.5)';
+      cCtx.lineWidth = 1.5;
+      for (let k = 0; k <= 8; k++) {
+        const a = ((135 + (270 * k) / 8) * Math.PI) / 180;
+        cCtx.beginPath();
+        cCtx.moveTo(cx + Math.cos(a) * r * 0.8, cy + Math.sin(a) * r * 0.8);
+        cCtx.lineTo(cx + Math.cos(a) * r * 0.94, cy + Math.sin(a) * r * 0.94);
+        cCtx.stroke();
+      }
+      const a = ((135 + 270 * Math.min(1, Math.max(0, frac))) * Math.PI) / 180;
+      cCtx.strokeStyle = '#ff4038';
+      cCtx.lineWidth = 2.5;
+      cCtx.beginPath();
+      cCtx.moveTo(cx, cy);
+      cCtx.lineTo(cx + Math.cos(a) * r * 0.74, cy + Math.sin(a) * r * 0.74);
+      cCtx.stroke();
+      cCtx.fillStyle = '#e8ecf4';
+      cCtx.beginPath();
+      cCtx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+      cCtx.fill();
+    };
+    drawCluster = (kmh) => {
+      cCtx.clearRect(0, 0, 256, 96);
+      // 배경판 없이 다이얼만 — 셸(GLB) 계기판 자리에 자연스럽게 얹힌다
+      gauge(96, 48, 38, kmh / 220);                     // 속도계
+      gauge(178, 48, 38, Math.min(1, kmh / 190) * 0.9); // 타코(속도 연동 연출)
+      gauge(28, 48, 16, 0.62);                          // 연료
+      gauge(240, 48, 16, 0.45);                         // 수온
+      cCtx.fillStyle = 'rgba(200,230,255,0.85)';
+      cCtx.textAlign = 'center';
+      cCtx.font = 'bold 13px sans-serif';
+      cCtx.fillText(String(kmh), 96, 76);
+      clusterTex.needsUpdate = true;
+    };
+    drawCluster(0);
+    const cluster = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.36, 0.135),
+      new THREE.MeshBasicMaterial({ map: clusterTex, transparent: true })
+    );
+    cluster.position.set(DX, 1.19, 1.14); // XJ220 비나클 개구부 앞
+    cluster.rotation.set(0.3, Math.PI, 0);
+    cluster.scale.setScalar(0.88);
+    group.add(cluster);
+
+    // (거울 유리 = GLB의 SfMirrorRoom/SfGlassSide가 Mirror 재질로 UV 리맵 RT를 받고,
+    //  천장 = GLB의 CkCanopy 헤드라이너가 담당 — 런타임 오버레이 불필요)
+  }
+
+  return { group, wheelSpin, rt, rearCam, drawCluster, eye };
 }
