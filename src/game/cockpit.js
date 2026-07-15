@@ -46,16 +46,26 @@ function remapMirrorUVs(mesh) {
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
 
-export function buildCockpit(carModel = 'car2') {
+// 변형 정의: 에셋, 눈 위치(로컬), 핸들 칼럼 각도, 캔버스 계기판 위치(순정 계기판 없는 차만)
+const VARIANTS = {
+  sf: {
+    asset: 'cockpitSf', tilt: -0.42, eye: { x: DX, y: 1.42, z: 0.55 },
+    cluster: { pos: [DX, 1.19, 1.14], scale: 0.88 },
+  },
+  918: { asset: 'cockpit918', tilt: -0.5, eye: { x: DX, y: 1.02, z: 0.34 } },
+};
+const BY_CAR = { car7: '918' };
+
+export function buildCockpit(carModel = 'car7') {
   const group = new THREE.Group();
   group.visible = false;
 
   const param = new URLSearchParams(location.search).get('cockpit');
-  const variant = ['sf', '918'].includes(param) ? param : (carModel === 'car7' ? '918' : 'sf');
+  const variant = VARIANTS[param] ? param : (BY_CAR[carModel] || 'sf');
+  const V = VARIANTS[variant];
   const is918 = variant === '918';
-  const WHEEL_TILT = is918 ? -0.5 : -0.42; // 칼럼 각도(XJ220 원래 각 ≈24°)
-  // 눈 위치(로컬): 918은 시트포지션이 낮은 로드스터
-  const eye = is918 ? { x: DX, y: 1.02, z: 0.34 } : { x: DX, y: 1.42, z: 0.55 };
+  const WHEEL_TILT = V.tilt; // 칼럼 각도(플랫화 베이크의 역각)
+  const eye = V.eye;
 
   // ── 미러 렌더타깃: 후방 카메라 1대를 거울들이 공유 ──
   const rt = new THREE.WebGLRenderTarget(MIRROR_W, MIRROR_H);
@@ -65,7 +75,7 @@ export function buildCockpit(carModel = 'car2') {
   const mirrorMat = new THREE.MeshBasicMaterial({ map: rt.texture });
 
   // ── GLB 셸 ──
-  const model = instantiate(is918 ? 'cockpit918' : 'cockpitSf');
+  const model = instantiate(V.asset);
   model.traverse((o) => {
     if (!o.isMesh) return;
     o.castShadow = false;
@@ -111,9 +121,9 @@ export function buildCockpit(carModel = 'car2') {
   const wheelSpin = model.getObjectByName('WheelSpin');
   if (wheelSpin) wheelSpin.rotation.set(WHEEL_TILT, 0, 0);
 
-  // ── 계기판/내비 캔버스: sf 전용 (918은 순정 3-다이얼+LCD가 있음) ──
+  // ── 계기판 캔버스: 순정 발광 계기판이 없는 변형(sf·엘란트라·코나)에만 ──
   let drawCluster = () => {};
-  if (!is918) {
+  if (V.cluster) {
     const cCv = document.createElement('canvas');
     cCv.width = 256; cCv.height = 96;
     const cCtx = cCv.getContext('2d');
@@ -166,9 +176,9 @@ export function buildCockpit(carModel = 'car2') {
       new THREE.PlaneGeometry(0.36, 0.135),
       new THREE.MeshBasicMaterial({ map: clusterTex, transparent: true })
     );
-    cluster.position.set(DX, 1.19, 1.14); // XJ220 비나클 개구부 앞
+    cluster.position.set(...V.cluster.pos); // 변형별 비나클 위치
     cluster.rotation.set(0.3, Math.PI, 0);
-    cluster.scale.setScalar(0.88);
+    cluster.scale.setScalar(V.cluster.scale);
     group.add(cluster);
 
     // (거울 유리 = GLB의 SfMirrorRoom/SfGlassSide가 Mirror 재질로 UV 리맵 RT를 받고,

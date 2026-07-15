@@ -9,43 +9,10 @@ import { createCarPreview } from './game/carPreview.js';
 
 const $ = (sel) => document.querySelector(sel);
 
-// 선택 가능한 차량 목록 (model = GLB 에셋 이름)
+// 선택 가능한 차량 목록 (model = GLB 에셋 이름).
+// 사용자 결정(2026-07-15): 당분간 918 스파이더 단일 차량 — 구 차량(car2~6)과
+// 엘란트라N/코나(car8/9)는 라인업에서 제외(자체제작 GLB는 저장소에 보존).
 const CARS = [
-  {
-    id: 'car2',
-    model: 'car2',
-    name: '타우로스 SV',
-    tag: '각진 웨지 슈퍼카 · 공격적인 실루엣',
-    color: '#e6b400',
-  },
-  {
-    id: 'car3',
-    model: 'car3',
-    name: '노마드 XT',
-    tag: '오프로드 4X4 · 대형 노비타이어 + 루프 라이트바',
-    color: '#5f6f38',
-  },
-  {
-    id: 'car4',
-    model: 'car4',
-    name: '버그 클래식',
-    tag: '레트로 라운드 쿠페 · 크롬 범퍼 + 원형 헤드라이트',
-    color: '#4d8ccc',
-  },
-  {
-    id: 'car5',
-    model: 'car5',
-    name: '박스밴 550',
-    tag: '경상용 하이루프 밴 · 캡오버 + 슬라이딩 도어',
-    color: '#dfe2e8',
-  },
-  {
-    id: 'car6',
-    model: 'car6',
-    name: '팬텀 570',
-    tag: '미드십 슈퍼카 · 대형 리어윙 에어로킷',
-    color: '#7a7e85',
-  },
   {
     id: 'car7',
     model: 'car7',
@@ -57,7 +24,7 @@ const CARS = [
 
 const state = {
   game: null,
-  selectedCar: 'car2',
+  selectedCar: 'car7',
   previews: [],
 };
 
@@ -441,7 +408,7 @@ $('#btn-menu').addEventListener('click', () => {
   showScreen('#screen-start');
 });
 
-// 개발·검증: ?auto=1 즉시 시작, ?car=car2 로 차량 지정
+// 개발·검증: ?auto=1 즉시 시작, ?car=car7 로 차량 지정
 const params = new URLSearchParams(location.search);
 const carParam = params.get('car');
 if (carParam && CARS.some((c) => c.id === carParam)) state.selectedCar = carParam;

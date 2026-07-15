@@ -39,7 +39,12 @@ body {
 }
 .tagline { color: var(--muted); margin: 4px 0 24px; }
 .start-wrap .btn-big { width: auto; min-width: 220px; }
-.credits { color: var(--muted); font-size: 11px; margin-top: 28px; opacity: 0.75; }
+.credits {
+  color: var(--muted); font-size: 11px; margin-top: 28px; opacity: 0.7;
+  display: flex; flex-direction: column; gap: 3px; text-align: center;
+  line-height: 1.5;
+}
+.credits-title { font-size: 10px; letter-spacing: 0.08em; opacity: 0.8; margin-bottom: 3px; }
 .credits a { color: var(--muted); text-decoration: underline; }
 
 /* 코스 미니맵 */

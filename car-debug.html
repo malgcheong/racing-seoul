@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- 개발 진단용: GLB를 게임과 같은 three.js 조건(야간 조명 근사)에서 단독 렌더 (배포 무관)
+     사용: /car-debug.html?m=traffic_staria&az=0.8  (az: 카메라 방위각) -->
+<canvas id="c" width="1100" height="700"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x10131f);
+const p = new URLSearchParams(location.search);
+const az = parseFloat(p.get('az') || '0.8');
+const dist = parseFloat(p.get('d') || '7.5'); // 버스처럼 큰 차는 ?d=16
+const cam = new THREE.PerspectiveCamera(40, 1100 / 700, 0.05, 200);
+cam.position.set(Math.sin(az) * dist, 2.6 + dist * 0.12, Math.cos(az) * dist);
+cam.lookAt(0, 0.9, 0);
+// 야간 근사: 은은한 헤미 + 가로등색 포인트
+scene.add(new THREE.HemisphereLight(0x33405f, 0x0a0c16, 0.9));
+const lamp = new THREE.PointLight(0xffdfae, 260, 40, 1.8);
+lamp.position.set(3, 6, 2);
+scene.add(lamp);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30),
+  new THREE.MeshStandardMaterial({ color: 0x24262e, roughness: 0.9 }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+new GLTFLoader().load('/assets/' + (p.get('m') || 'traffic_staria') + '.glb', (g) => {
+  scene.add(g.scene);
+  renderer.render(scene, cam);
+});
+</script>

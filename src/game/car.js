@@ -19,7 +19,7 @@ const DRIFT_GRIP = 2.6;     // 드리프트 시 접지
 const _v1 = new CANNON.Vec3();
 
 export class Car {
-  constructor(modelName = 'car2', world, startPos = { x: 0, y: 0, z: 0 }) {
+  constructor(modelName = 'car7', world, startPos = { x: 0, y: 0, z: 0 }) {
     this.group = new THREE.Group();
     const model = instantiate(modelName);
     model.rotation.y = Math.PI; // 에셋 앞 보정(기존과 동일)

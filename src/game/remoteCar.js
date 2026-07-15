@@ -13,7 +13,7 @@ const DELAY_MS = 130; // 보간 지연 버퍼(스냅샷 ~15Hz 기준 2틱)
 
 export class RemoteCar {
   // headLight: 게임이 미리 만들어둔 풀 광원(셰이더 재컴파일 방지) — 없으면 광원 생략
-  constructor(scene, world, modelName = 'car2', headLight = null) {
+  constructor(scene, world, modelName = 'car7', headLight = null) {
     this.group = new THREE.Group();
     const model = instantiate(modelName);
     model.rotation.y = Math.PI; // 에셋 전방 보정(Car와 동일)
