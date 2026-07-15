@@ -1,9 +1,10 @@
 {
-  "name": "memory-racing",
+  "name": "racing-seoul",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "추억 여정 레이싱 게임 MVP - 업로드한 사진으로 개인화 레이싱 맵을 생성",
+  "description": "NIGHT DRIVE — 서울 한강 야경을 달리는 Three.js 아케이드 레이싱",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
