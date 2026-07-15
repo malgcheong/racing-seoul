@@ -1,0 +1,22 @@
+THIRD-PARTY 3D ASSETS
+=====================
+
+The MIT License (see LICENSE) covers the SOURCE CODE of this project only.
+
+The 3D models bundled in `public/assets/` are third-party works licensed
+under Creative Commons Attribution 4.0 International (CC BY 4.0), NOT MIT.
+Reuse is permitted under CC BY terms, which require preserving the author
+attribution below. These credits are also shown on the game's start screen.
+
+  - "Porsche 918 Spyder 2015" by 3D Cars Studio (CC BY 4.0)
+    https://sketchfab.com/3d-models/porsche-918-spyder-2015-b8d069b411804e43bccccd2e9e6fc1e7
+  - "Car interior" by Gerhald (CC BY 4.0)
+    https://sketchfab.com/3d-models/car-interior-c5f830a811af4917972de8fa47949de9
+  - "Hyundai Ioniq 5 lowpoly" by andikapratamaw (CC BY 4.0)
+    https://sketchfab.com/3d-models/hyundai-ioniq-5-lowpoly-675e78311e8440d88714bd212cb7a8fb
+  - "2017 Hyundai Sonata Hybrid" by m3ika3D (CC BY 4.0)
+    https://sketchfab.com/3d-models/2017-hyundai-sonata-hybrid-c435ef02b27140e2a5f800c622bb4c04
+  - "1998 Hyundai Aero Space Coach Bus" by ImperialBlue3D (CC BY 4.0)
+    https://sketchfab.com/3d-models/1998-hyundai-aero-space-coach-bus-b51273fe6c19486eb71e95bc9c5c7032
+
+If you fork or redistribute this project, you must preserve these attributions.
