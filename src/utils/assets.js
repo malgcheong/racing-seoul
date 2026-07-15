@@ -22,6 +22,7 @@ const FILES = {
   trafficIoniq5: '/assets/traffic_ioniq5.glb',     // "Hyundai Ioniq 5 lowpoly" by andikapratamaw
   trafficSonata: '/assets/traffic_sonata.glb',     // "2017 Hyundai Sonata Hybrid" by m3ika3D
   trafficBus: '/assets/traffic_bus.glb',           // "1998 Hyundai Aero Space" by ImperialBlue3D
+  trafficBmw8: '/assets/traffic_bmw8.glb',         // "Bmw 8 car" by itsrit3sh
   // Sketchfab "Car interior" by Gerhald (CC-BY) 기반 — 크레딧 표기 필요
   cockpitSf: '/assets/cockpit_sf.glb',
   // Sketchfab "Porsche 918 Spyder 2015" 실내 추출 (CC-BY) — 크레딧 표기 필요
