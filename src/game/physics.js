@@ -4,7 +4,7 @@
 
 import * as CANNON from 'cannon-es';
 
-export const carMaterial = new CANNON.Material('car');
+const carMaterial = new CANNON.Material('car');
 
 export function createWorld() {
   const world = new CANNON.World({ gravity: new CANNON.Vec3(0, 0, 0) });

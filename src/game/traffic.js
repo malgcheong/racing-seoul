@@ -111,6 +111,11 @@ export class TrafficSystem {
     this.L = this.cum[this.n - 1];
 
     this.cars = [];
+    this._pS = -999; // 플레이어 위치 캐시(laneBlocked용) — control에서 매 프레임 갱신
+    this._pLat = 0;
+    // 멀티 게스트: 방장이 시뮬한 트래픽 스냅샷을 재생만 한다(applyNet).
+    // 바디는 KINEMATIC — 로컬에서 밀리지 않고 방장 좌표에 고정, 충돌 판정은 유지
+    this.puppet = !!opts.puppet;
     const count = opts.count ?? 8;
     for (let i = 0; i < count; i++) {
       // 차종 믹스: 승용차 위주 + 탑차/컨테이너/덤프트럭
@@ -126,7 +131,8 @@ export class TrafficSystem {
       scene.add(wrap);
       const d = built.dims;
       const body = makeCarBody(this.world, { w: d.w, h: 1.0, l: d.l, mass: d.mass, pos: { x: 0, y: this.deckY, z: 0 } });
-      body.__traffic = true;
+      body.__traffic = true; // 충돌 즉시 실패 규칙 대상(퍼펫에도 동일 적용)
+      if (this.puppet) body.type = CANNON.Body.KINEMATIC;
       this.cars.push({
         wrap, body, tailMat: built.tailMat, blinkL: built.blinkL, blinkR: built.blinkR,
         len: d.l, slow: d.slow,
@@ -165,12 +171,27 @@ export class TrafficSystem {
     } else {
       car.s = Math.max(0, playerS - 80 - this.rng() * 120);
     }
-    car.laneIdx = Math.floor(this.rng() * this.lanes.length);
-    // 트럭류는 느리게(10~17), 승용차는 12~26 m/s (플레이어가 추월)
-    car.speed = car.slow ? 10 + this.rng() * 7 : 12 + this.rng() * 14;
+    // 지정차로제 스폰: 트럭류는 3~4차로(하위), 승용차는 2~4차로 —
+    // 1차로(인덱스 0, 중분대 쪽)는 추월 전용이라 순항 스폰 금지.
+    // 단 ~18% 승용차는 '1차로 정속 빌런' — 추월차로를 계속 점거한다(상향등으로 쫓아낼 것)
+    const maxIdx = this.lanes.length - 1;
+    car.villain = !car.slow && this.rng() < 0.18;
+    if (car.villain) {
+      car.laneIdx = 0;
+      car.speed = 13 + this.rng() * 5; // 정속(느긋) — 추월차로에서 길을 막는다
+    } else {
+      car.laneIdx = car.slow
+        ? Math.min(maxIdx, 2) + Math.floor(this.rng() * Math.max(1, maxIdx - 1))
+        : Math.min(maxIdx, 1) + Math.floor(this.rng() * Math.max(1, maxIdx));
+      car.laneIdx = Math.min(maxIdx, car.laneIdx);
+      // 트럭류는 느리게(10~17), 승용차는 12~26 m/s (플레이어가 추월)
+      car.speed = car.slow ? 10 + this.rng() * 7 : 12 + this.rng() * 14;
+    }
+    car.yieldReq = 0; // 상향등 양보 요구 누적(초)
+    car.escapeT = 0;  // 1차로 복귀용 임시 가속 타이머
 
     // 종종 다른 차 옆에 나란히 스폰 — 단, 그 차가 플레이어 시야 밖(140m+)일 때만
-    if (!this.debugClose && this.rng() < 0.35) {
+    if (!this.debugClose && !car.villain && this.rng() < 0.35) {
       const buddy = this.cars.find((c) => {
         if (!c.active || c === car) return false;
         const bAhead = c.s - playerS;
@@ -178,9 +199,12 @@ export class TrafficSystem {
       });
       if (buddy) {
         car.s = Math.max(0, Math.min(this.L - 40, buddy.s + (this.rng() - 0.5) * 5));
-        car.laneIdx = Math.max(0, Math.min(this.lanes.length - 1,
-          buddy.laneIdx + (this.rng() < 0.5 ? -1 : 1))); // 인접 차선
-        if (car.laneIdx === buddy.laneIdx) car.laneIdx = (buddy.laneIdx + 1) % this.lanes.length;
+        // 인접 차선 — 지정차로 하한(트럭 3차로·승용 2차로) 준수
+        const lo = Math.min(maxIdx, car.slow ? 2 : 1);
+        car.laneIdx = Math.max(lo, Math.min(maxIdx,
+          buddy.laneIdx + (this.rng() < 0.5 ? -1 : 1)));
+        if (car.laneIdx === buddy.laneIdx) car.laneIdx = Math.min(maxIdx, buddy.laneIdx + 1);
+        if (car.laneIdx === buddy.laneIdx) car.laneIdx = Math.max(lo, buddy.laneIdx - 1);
         car.speed = buddy.speed * (0.97 + this.rng() * 0.06);
       }
     }
@@ -206,34 +230,210 @@ export class TrafficSystem {
     b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.atan2(p.tan.x, p.tan.z));
   }
 
+  // 목표 차선의 옆자리 점유 검사 — 옆에 차가 있으면(또는 그 차선으로 이동 중이거나,
+  // 플레이어가 그 자리에 있으면) 차선변경 금지. 종방향 겹침은 차 길이+여유로 판정.
+  laneBlocked(car, laneCenter) {
+    for (const o of this.cars) {
+      if (o === car || !o.active) continue;
+      if (Math.abs(o.s - car.s) > (car.len + o.len) / 2 + 7) continue;
+      if (Math.abs(o.lane - laneCenter) < 2.2 || Math.abs(o.targetLane - laneCenter) < 0.6) return true;
+    }
+    // 플레이어 차량도 장애물로 취급 — AI가 플레이어 옆구리로 파고들지 않게
+    if (Math.abs(this._pS - car.s) < (car.len + 5) / 2 + 7 &&
+        Math.abs(this._pLat - laneCenter) < 2.2) return true;
+    return false;
+  }
+
+  // 멀티: 방장(시뮬 주체) 퇴장 시 얼어붙은 퍼펫 차량 정리 — 보이지 않게 치우고
+  // 바디도 지하로 내려 보이지 않는 충돌이 남지 않게 한다
+  despawnAll() {
+    for (const car of this.cars) {
+      car.active = false;
+      car.wrap.visible = false;
+      car._net = null;
+      car.body.position.y = -500;
+      car.body.velocity.set(0, 0, 0);
+    }
+  }
+
+  // 멀티: 서버 지정 방장이 따로 있을 때(내가 늦게 입장) 시뮬 주체 양보 — 퍼펫으로 전환
+  demote() {
+    if (this.puppet) return;
+    this.puppet = true;
+    for (const car of this.cars) {
+      car.body.type = CANNON.Body.KINEMATIC;
+      car._net = null;
+    }
+  }
+
+  // 멀티 방장 승계: 퍼펫(재생) 모드 → 실제 AI 시뮬로 승격.
+  // 마지막 수신 위치에서 각 차의 논리 상태(호길이 s·차선·속도)를 복원한다
+  promote() {
+    if (!this.puppet) return;
+    this.puppet = false;
+    for (const car of this.cars) {
+      const b = car.body;
+      b.type = CANNON.Body.DYNAMIC;
+      b.updateMassProperties();
+      car._net = null;
+      if (!car.active) { car.wrap.visible = false; continue; }
+      // 호길이 s: 전 구간 성긴 탐색(승격 시 1회) 후 지역 정밀화
+      let bi = 0, bd = Infinity;
+      for (let i = 0; i < this.n; i += 4) {
+        const dx = b.position.x - this.samples[i].pos.x;
+        const dz = b.position.z - this.samples[i].pos.z;
+        const d = dx * dx + dz * dz;
+        if (d < bd) { bd = d; bi = i; }
+      }
+      for (let i = Math.max(0, bi - 4); i < Math.min(this.n, bi + 5); i++) {
+        const dx = b.position.x - this.samples[i].pos.x;
+        const dz = b.position.z - this.samples[i].pos.z;
+        const d = dx * dx + dz * dz;
+        if (d < bd) { bd = d; bi = i; }
+      }
+      car.s = this.cum[bi];
+      const p = this.posAt(car.s);
+      const lat = (b.position.x - p.pos.x) * p.left.x + (b.position.z - p.pos.z) * p.left.z;
+      let li = 0, ld = Infinity;
+      this.lanes.forEach((L, k) => {
+        const d = Math.abs(L - lat);
+        if (d < ld) { ld = d; li = k; }
+      });
+      car.laneIdx = li;
+      car.lane = lat; // 현재 횡위치에서 지정 차선으로 자연히 수렴
+      car.targetLane = this.lanes[li];
+      car.speed = car.slow ? 11 + this.rng() * 5 : 14 + this.rng() * 9;
+      car.effSpeed = car.speed * 0.8;
+      car.laneChangeTimer = 2 + this.rng() * 5;
+      car.signalTimer = 0;
+      car.blinkSide = 0;
+      car.villain = false; // 승계 후엔 일반 차로(상태 불명 빌런 재지정 안 함)
+      car.yieldReq = 0;
+      car.escapeT = 0;
+      b.velocity.set(p.tan.x * car.effSpeed, 0, p.tan.z * car.effSpeed);
+    }
+  }
+
+  // ── 멀티 동기화: 방장이 트래픽 상태를 직렬화(getNet) → 게스트가 재생(applyNet) ──
+  getNet() {
+    return this.cars.map((c) => {
+      if (!c.active) return 0;
+      const b = c.body;
+      const yaw = Math.atan2(2 * (b.quaternion.w * b.quaternion.y), 1 - 2 * b.quaternion.y * b.quaternion.y);
+      return [
+        Math.round(b.position.x * 10) / 10, Math.round(b.position.y * 10) / 10,
+        Math.round(b.position.z * 10) / 10, Math.round(yaw * 100) / 100,
+        c.effSpeed < c.speed - 1.5 ? 1 : 0, c.blinkSide,
+      ];
+    });
+  }
+
+  applyNet(arr) {
+    for (let i = 0; i < this.cars.length && i < arr.length; i++) {
+      const car = this.cars[i];
+      const s = arr[i];
+      if (!s) { car.active = false; car.wrap.visible = false; car._net = null; continue; }
+      car.active = true;
+      car.wrap.visible = true;
+      car._net = { x: s[0], y: s[1], z: s[2], yaw: s[3], brake: s[4], blink: s[5] };
+    }
+  }
+
   // 물리 스텝 전: 차선변경/깜빡이 + 차간거리(브레이크등) + 추종 힘
-  control(dt, playerS, playerLat = 0, playerSpeed = 0) {
+  control(dt, playerS, playerLat = 0, playerSpeed = 0, highBeam = false) {
     const L = this.L;
+    // 퍼펫(멀티 게스트): 방장 스냅샷(~10Hz)으로 보간 이동만 — AI 로직 전부 스킵
+    if (this.puppet) {
+      for (const car of this.cars) {
+        const n = car._net;
+        if (!car.active || !n) continue;
+        const b = car.body;
+        const k = Math.min(1, 10 * dt);
+        b.position.x += (n.x - b.position.x) * k;
+        b.position.y += (n.y - b.position.y) * k;
+        b.position.z += (n.z - b.position.z) * k;
+        b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), n.yaw);
+        car.tailMat.emissiveIntensity = n.brake ? 4.2 : 1.3;
+        car.blinkPhase += dt;
+        const on = n.blink !== 0 && (car.blinkPhase % 0.7) < 0.38;
+        for (const m of car.blinkL) m.visible = n.blink > 0 && on;
+        for (const m of car.blinkR) m.visible = n.blink < 0 && on;
+      }
+      return;
+    }
+    this._pS = playerS;      // laneBlocked에서 플레이어 위치 참조용
+    this._pLat = playerLat;
     for (const car of this.cars) {
       if (!car.active) this.spawnAhead(car, playerS);
 
-      // 차선 변경: 먼저 깜빡이만 켜고(사전 신호), 1~1.8초 뒤 실제로 이동 시작
+      // 상향등 양보 요구: 플레이어가 같은 차선 바로 뒤(4~55m)에서 상향등을 쏘면
+      // 누적 — 0.4초 이상 받으면 옆 차선으로 비켜준다(1차로 빌런 퇴치 수단)
+      const dsBeam = car.s - playerS;
+      if (highBeam && dsBeam > 4 && dsBeam < 55 && Math.abs(playerLat - car.lane) < 2.6) {
+        car.yieldReq = Math.min(2, (car.yieldReq || 0) + dt);
+      } else {
+        car.yieldReq = Math.max(0, (car.yieldReq || 0) - dt * 2);
+      }
+
+      // 차선 변경(대한민국 지정차로제 반영):
+      //  · 인덱스 0(중분대 쪽) = 1차로 = 추월 전용 — 순항 시 우측 복귀 의무
+      //    (단 villain은 예외 — 1차로를 계속 점거하는 정속 빌런, 상향등에만 반응)
+      //  · 트럭류(slow)는 3~4차로만 순항, 추월도 3차로까지
+      //  · 추월(앞차에 막힘)은 왼쪽으로만 — 우측 추월 금지
+      //  · 옆자리 점유 시 금지(laneBlocked), 깜빡이 신호 후 이동은 기존과 동일
       car.laneChangeTimer -= dt;
-      if (car.signalTimer <= 0 && car.blinkSide === 0 && car.laneChangeTimer <= 0) {
+      if (car.signalTimer <= 0 && car.blinkSide === 0 && car.laneChangeTimer <= 0
+          && this.lanes.length > 1) {
         car.laneChangeTimer = 3 + this.rng() * 6;
-        if (this.lanes.length > 1 && this.rng() < 0.5) {
-          const step = this.rng() < 0.5 ? -1 : 1;
-          let ni = car.laneIdx + step;
-          if (ni < 0) ni = 1;
-          if (ni >= this.lanes.length) ni = this.lanes.length - 2;
-          if (ni !== car.laneIdx) {
-            car.pendingIdx = ni;
-            car.pendingLane = this.lanes[ni];
-            car.blinkSide = car.pendingLane > car.lane ? 1 : -1; // +lateral 이동=1
-            car.signalTimer = 1.0 + this.rng() * 0.8;            // 이 시간 뒤 이동
+        const maxI = this.lanes.length - 1;
+        const minCruise = Math.min(maxI, car.slow ? 2 : 1); // 순항 허용 최상위(왼쪽) 인덱스
+        const blockedAhead = car.effSpeed < car.speed * 0.9; // 직전 프레임 기준 앞막힘
+        let ni = -1;
+        let sigT = 1.0 + this.rng() * 0.8;
+        if (car.yieldReq > 0.4) {
+          // 상향등 받음 — 오른쪽 우선, 막혀 있으면 왼쪽으로라도 비켜준다
+          const r = car.laneIdx + 1, l = car.laneIdx - 1;
+          if (r <= maxI && !this.laneBlocked(car, this.lanes[r])) ni = r;
+          else if (l >= 0 && !this.laneBlocked(car, this.lanes[l])) ni = l;
+          sigT = 0.45 + this.rng() * 0.3;  // 빠릿하게 깜빡이 켜고 비킴
+          car.laneChangeTimer = 0.8;       // 양쪽 다 막혔으면 곧 재시도
+        } else if (car.laneIdx < minCruise && !car.villain) {
+          // 추월차로(또는 트럭의 상위 차로)에 있음 — 복귀는 의무(무조건 오른쪽).
+          // 옆이 막혔으면 잠시 가속해 자리를 만들면서 짧은 주기로 계속 재시도
+          ni = car.laneIdx + 1;
+          car.laneChangeTimer = 0.6 + this.rng() * 0.8;
+          if (this.laneBlocked(car, this.lanes[ni])) {
+            car.escapeT = 1.6; // 복귀 자리 확보용 임시 가속(아래 속도 계산에서 +18%)
+            ni = -1;
           }
+        } else if (blockedAhead && this.rng() < 0.75) {
+          // 앞이 막힘 → 왼쪽으로 추월 (트럭은 3차로가 한계)
+          const minOvertake = car.slow ? Math.min(maxI, 2) : 0;
+          if (car.laneIdx - 1 >= minOvertake) ni = car.laneIdx - 1;
+        } else if (car.villain && car.laneIdx > 0 && this.rng() < 0.35) {
+          // 빌런: 쫓겨났어도 슬금슬금 다시 1차로로 기어들어간다
+          ni = car.laneIdx - 1;
+        } else if (!car.villain && this.rng() < 0.3) {
+          // 한가한 차선 이동 — 순항 허용 범위 안에서만
+          const cand = car.laneIdx + (this.rng() < 0.5 ? -1 : 1);
+          if (cand >= minCruise && cand <= maxI) ni = cand;
+        }
+        if (ni >= 0 && ni !== car.laneIdx && !this.laneBlocked(car, this.lanes[ni])) {
+          car.pendingIdx = ni;
+          car.pendingLane = this.lanes[ni];
+          car.blinkSide = car.pendingLane > car.lane ? 1 : -1; // +lateral 이동=1
+          car.signalTimer = sigT;                              // 이 시간 뒤 이동
         }
       }
       if (car.signalTimer > 0) {
         car.signalTimer -= dt;
-        if (car.signalTimer <= 0) { // 신호 끝 → 실제 차선 이동 개시
-          car.laneIdx = car.pendingIdx;
-          car.targetLane = car.pendingLane;
+        if (car.signalTimer <= 0) { // 신호 끝 → 옆이 여전히 비었으면 실제 이동 개시
+          if (this.laneBlocked(car, car.pendingLane)) {
+            car.blinkSide = 0; // 신호 중 옆자리가 막힘 — 변경 취소, 깜빡이 끔
+          } else {
+            car.laneIdx = car.pendingIdx;
+            car.targetLane = car.pendingLane;
+          }
         }
       }
       car.lane += (car.targetLane - car.lane) * Math.min(1, 1.6 * dt);
@@ -250,7 +450,9 @@ export class TrafficSystem {
 
       // 차간 거리: 같은 차선 앞차가 가까우면 감속(브레이크등)
       // 트럭류는 길어서 차 길이 절반씩을 안전거리에 반영
-      let cap = car.speed;
+      // 1차로 복귀 자리 확보 중이면 임시 가속(+18%) — 앞차 안전거리는 그대로 적용
+      car.escapeT = Math.max(0, (car.escapeT || 0) - dt);
+      let cap = car.speed * (car.escapeT > 0 ? 1.18 : 1);
       for (const o of this.cars) {
         if (!o.active || o === car) continue;
         const ds = o.s - car.s;                            // 앞쪽 거리(개방 트랙)
@@ -275,17 +477,35 @@ export class TrafficSystem {
           cap = Math.min(cap, car.speed * 0.62);
         }
       }
+      // 커브 감속: 전방 곡률 기준 횡가속 한계(≈6m/s²) — 급커브에 직선 속도로
+      // 진입하면 추종 힘이 원심력을 못 이겨 바깥으로 미끄러진다
+      {
+        const t0 = this.posAt(car.s);
+        const y0 = Math.atan2(t0.tan.x, t0.tan.z);
+        const t1 = this.posAt(car.s + 24); // posAt 스크래치 공유 — t0 값은 먼저 소비
+        let dy = Math.atan2(t1.tan.x, t1.tan.z) - y0;
+        dy = Math.abs(Math.atan2(Math.sin(dy), Math.cos(dy)));
+        const kappa = dy / 24;
+        if (kappa > 1e-4) cap = Math.min(cap, Math.max(8, Math.sqrt(6.0 / kappa)));
+      }
       car.effSpeed += (cap - car.effSpeed) * Math.min(1, 3 * dt); // 부드럽게 가감속
       const braking = car.effSpeed < car.speed - 1.5;
       car.tailMat.emissiveIntensity = braking ? 4.2 : 1.3;
 
       car.s = Math.min(this.L - 6, car.s + car.effSpeed * dt);
 
-      const p = this.posAt(car.s);
+      // 전방 조준점 추종(pure pursuit): 현재 접선이 아니라 경로 위 앞쪽 지점을
+      // 향해 속도를 만든다 — 커브를 미리 조준해서 반응 지연으로 바깥으로 밀리는
+      // '미끄러짐'이 사라진다. 조준 거리는 속도 비례(고속일수록 멀리 본다)
       const b = car.body;
-      const tx = p.pos.x + p.left.x * car.lane, tz = p.pos.z + p.left.z * car.lane;
-      const desVx = p.tan.x * car.effSpeed + (tx - b.position.x) * 1.6;
-      const desVz = p.tan.z * car.effSpeed + (tz - b.position.z) * 1.6;
+      const look = 5 + car.effSpeed * 0.5;
+      const pa = this.posAt(car.s + look);
+      const ax = pa.pos.x + pa.left.x * car.lane;
+      const az = pa.pos.z + pa.left.z * car.lane;
+      const dx = ax - b.position.x, dz = az - b.position.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      const desVx = (dx / dl) * car.effSpeed;
+      const desVz = (dz / dl) * car.effSpeed;
       let fx = (desVx - b.velocity.x) * 8 * b.mass;
       let fz = (desVz - b.velocity.z) * 8 * b.mass;
       // 힘 상한은 질량 비례(최대 가속도 24m/s²) — 고정값이면 무거운 트럭이
@@ -294,7 +514,9 @@ export class TrafficSystem {
       if (fm > fmax) { fx *= fmax / fm; fz *= fmax / fm; }
       b.force.x += fx;
       b.force.z += fz;
-      const desYaw = Math.atan2(p.tan.x, p.tan.z);
+      // 차체 방향도 조준점을 향해 — 커브에서 살짝 안쪽을 보고, 차선변경 때
+      // 자연스럽게 이동 방향으로 기운다
+      const desYaw = Math.atan2(dx, dz);
       const diff = ((desYaw - Math.atan2(2 * (b.quaternion.w * b.quaternion.y), 1 - 2 * b.quaternion.y * b.quaternion.y) + Math.PI) % (2 * Math.PI)) - Math.PI;
       b.angularVelocity.y = THREE.MathUtils.lerp(b.angularVelocity.y, diff * 2.5, Math.min(1, 4 * dt));
 
@@ -305,6 +527,16 @@ export class TrafficSystem {
 
   // 물리 스텝 후: 도로 밖 클램프 + 메시 동기화
   postStep(maxLat) {
+    // 퍼펫: 좌표는 방장 권한 — 클램프 없이 메시 동기화만
+    if (this.puppet) {
+      for (const car of this.cars) {
+        if (!car.active) continue;
+        const b = car.body;
+        car.wrap.position.set(b.position.x, b.position.y, b.position.z);
+        car.wrap.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+      }
+      return;
+    }
     for (const car of this.cars) {
       if (!car.active) continue;
       const b = car.body;
