@@ -89,6 +89,21 @@ function makeDamas() {
   };
 }
 
+// 트럭 2종: 소형(봉고) + 대형 카고(Xcient) — slow 클래스로 지정차로 규칙 적용
+function makeBongo() {
+  return {
+    ...buildFromTemplate('trafficBongo', {}),
+    dims: { w: 1.7, l: 5.0, mass: 2800, slow: true },
+  };
+}
+
+function makeXcient() {
+  return {
+    ...buildFromTemplate('trafficXcient', {}),
+    dims: { w: 2.5, l: 9.5, mass: 12000, slow: true },
+  };
+}
+
 // 고속버스(에어로 스페이스): 리버리 유지(틴트 없음), 트럭류 차로 규칙(slow) 적용
 function makeBus() {
   return {
@@ -124,14 +139,16 @@ export class TrafficSystem {
     this.puppet = !!opts.puppet;
     const count = opts.count ?? 8;
     for (let i = 0; i < count; i++) {
-      // 차종 믹스: 실차 5종 균등 위주 + 고속버스 소수
+      // 차종 믹스: 승용 5종(아이오닉5·쏘나타·BMW8·G-Class·다마스) + 트럭/버스 3종
       const roll = this.rng();
       let built;
-      if (roll < 0.22) built = makeIoniq5();
-      else if (roll < 0.44) built = makeSonata();
-      else if (roll < 0.62) built = makeBmw8();
-      else if (roll < 0.78) built = makeGClass();
-      else if (roll < 0.90) built = makeDamas();
+      if (roll < 0.16) built = makeIoniq5();
+      else if (roll < 0.32) built = makeSonata();
+      else if (roll < 0.46) built = makeBmw8();
+      else if (roll < 0.60) built = makeGClass();
+      else if (roll < 0.72) built = makeDamas();
+      else if (roll < 0.84) built = makeBongo();
+      else if (roll < 0.93) built = makeXcient();
       else built = makeBus();
       const wrap = new THREE.Group();
       wrap.add(built.group);

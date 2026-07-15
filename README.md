@@ -51,3 +51,5 @@ cd server-spring && ./gradlew bootRun   # Spring Boot 릴레이 (동일 프로�
   | Bmw 8 car | itsrit3sh |
   | Mercedes Benz G-Class W263 | Lexyc16 |
   | Chevrolet Damas | own.guest |
+  | Hyundai Porter II (Bongo III) | yunho98 |
+  | Hyundai Xcient | nguyenhoanglam20100609 |
