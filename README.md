@@ -49,3 +49,5 @@ cd server-spring && ./gradlew bootRun   # Spring Boot 릴레이 (동일 프로�
   | 2017 Hyundai Sonata Hybrid | m3ika3D |
   | 1998 Hyundai Aero Space Coach Bus | ImperialBlue3D |
   | Bmw 8 car | itsrit3sh |
+  | Mercedes Benz G-Class W263 | Lexyc16 |
+  | Chevrolet Damas | own.guest |
