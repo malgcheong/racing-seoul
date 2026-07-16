@@ -6,9 +6,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const FILES = {
-  // 플레이어 차량: 현재 918 단일(사용자 결정 2026-07-15)
-  // Sketchfab "Porsche 918 Spyder 2015" by 3D Cars Studio (CC-BY) — 크레딧 표기 필요
-  car7: '/assets/car7.glb',
+  // 플레이어 차량 (전부 Sketchfab CC-BY — 크레딧 index.html)
+  car7: '/assets/car7.glb',    // "Porsche 918 Spyder 2015" by 3D Cars Studio
+  car10: '/assets/car10.glb',  // "Mercedes S63 Coupe Brabus 800" by BlackSnow02
+  car11: '/assets/car11.glb',  // "Mercedes SL63 AMG" by BlackSnow02
+  car12: '/assets/car12.glb',  // "BMW M4 CSL 2023" by BlackSnow02
   treeRound: '/assets/tree_round.glb',
   treePine: '/assets/tree_pine.glb',
   buildingA: '/assets/building_a.glb',

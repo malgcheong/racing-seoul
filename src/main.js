@@ -9,15 +9,34 @@ import { createCarPreview } from './game/carPreview.js';
 
 const $ = (sel) => document.querySelector(sel);
 
-// 선택 가능한 차량 목록 (model = GLB 에셋 이름).
-// 사용자 결정(2026-07-15): 당분간 918 스파이더 단일 차량 — 구 차량(car2~6)과
-// 엘란트라N/코나(car8/9)는 라인업에서 제외(자체제작 GLB는 저장소에 보존).
+// 선택 가능한 차량 목록 (model = GLB 에셋 이름). 전부 Sketchfab CC-BY 실사 모델.
 const CARS = [
   {
     id: 'car7',
     model: 'car7',
     name: '918 스파이더',
     tag: '하이브리드 하이퍼카 · 실사 모델 (CC-BY)',
+    color: '#c8ccd4',
+  },
+  {
+    id: 'car10',
+    model: 'car10',
+    name: 'S63 쿠페 브라부스',
+    tag: '럭셔리 GT 쿠페 · 브라부스 800 · 실사 모델 (CC-BY)',
+    color: '#20242a',
+  },
+  {
+    id: 'car11',
+    model: 'car11',
+    name: 'SL63 AMG',
+    tag: 'AMG 로드스터 · 실사 모델 (CC-BY)',
+    color: '#3a3f48',
+  },
+  {
+    id: 'car12',
+    model: 'car12',
+    name: 'M4 CSL',
+    tag: 'BMW M 트랙 스페셜 · 실사 모델 (CC-BY)',
     color: '#c8ccd4',
   },
 ];
