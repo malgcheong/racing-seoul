@@ -57,9 +57,12 @@ export function toonifyScene(scene) {
 
 // 뎁스 불연속 잉크 엣지: 이웃 픽셀과의 뷰공간 깊이 차가 (거리 비례 임계보다)
 // 크면 잉크색으로 — 실루엣·건물 모서리에 만화 선이 생긴다.
+// 입력 uniform 이름이 tDiffuse가 아닌 tScene인 이유: ShaderPass가 tDiffuse를
+// 컴포저 readBuffer로 덮어쓰는데, 우리는 전용 씬 RT를 읽어야 한다(피드백 루프
+// 회피 구조 — 컴포저 핑퐁 버퍼엔 뎁스를 부착하지 않는다).
 export const InkEdgeShader = {
   uniforms: {
-    tDiffuse: { value: null },
+    tScene: { value: null },
     tDepth: { value: null },
     resolution: { value: new THREE.Vector2(1, 1) },
     cameraNear: { value: 0.1 },
@@ -74,7 +77,7 @@ export const InkEdgeShader = {
     }`,
   fragmentShader: /* glsl */ `
     #include <packing>
-    uniform sampler2D tDiffuse;
+    uniform sampler2D tScene;
     uniform sampler2D tDepth;
     uniform vec2 resolution;
     uniform float cameraNear, cameraFar, strength;
@@ -90,7 +93,7 @@ export const InkEdgeShader = {
       float d = max(dx, dy);
       // 거리 비례 임계 — 원경(빌딩 숲)에서 온통 선투성이가 되는 걸 억제
       float edge = smoothstep(0.9, 2.2, d / (0.004 * c + 0.05));
-      vec3 col = texture2D(tDiffuse, vUv).rgb;
+      vec3 col = texture2D(tScene, vUv).rgb;
       vec3 ink = vec3(0.012, 0.016, 0.03);
       gl_FragColor = vec4(mix(col, ink, edge * strength), 1.0);
     }`,
