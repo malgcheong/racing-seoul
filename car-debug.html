@@ -25,8 +25,12 @@ const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30),
   new THREE.MeshStandardMaterial({ color: 0x24262e, roughness: 0.9 }));
 ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
+// 로드 실패/런타임 에러를 DOM에 남긴다 (헤드리스 --dump-dom 진단용)
+const log = (t) => document.body.insertAdjacentHTML('beforeend', `<pre>${t}</pre>`);
+window.addEventListener('error', (e) => log('WINDOW_ERR: ' + e.message));
 new GLTFLoader().load('/assets/' + (p.get('m') || 'traffic_staria') + '.glb', (g) => {
   scene.add(g.scene);
   renderer.render(scene, cam);
-});
+  log('LOADED_OK');
+}, undefined, (err) => log('LOAD_ERR: ' + (err && (err.message || err.stack || err))));
 </script>
