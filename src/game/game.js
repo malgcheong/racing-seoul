@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { generateTrack, buildRoadMesh, buildMedian, buildStartLine, straightenTrackWindow, MEDIAN_HALF } from '../map/trackGenerator.js';
+import { generateTrack, buildRoadMesh, buildMedian, buildStartLine, MEDIAN_HALF } from '../map/trackGenerator.js';
 import { generateBranchRoute, buildBranchRoad } from '../map/branchRoad.js';
 import { buildRoadArrows } from '../map/roadArrows.js';
 import { TrafficSystem } from './traffic.js';
@@ -17,7 +17,6 @@ import { Minimap } from './minimap.js';
 import { ParticleSystem } from './particles.js';
 import { Rain } from './rain.js';
 import { buildEnvironment } from '../map/decorations.js';
-import { buildRestArea } from '../map/restArea.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld, clampToRoad } from './physics.js';
@@ -75,7 +74,7 @@ export class Game {
     this.ui = ui;
     this.carModel = opts.carModel || 'car7'; // 선택된 차량 에셋 이름
     // URL 파라미터 스냅샷 — 게임 생성 시점 기준으로 한 번만 파싱해 전역에서 재사용
-    // (개발·검증 파라미터 목록은 README 격인 메모리/주석 참고: seed·at·branch·rest·
+    // (개발·검증 파라미터 목록은 README 격인 메모리/주석 참고: seed·at·branch·
     //  cam·tod·wx·hard·traffic·dpr·stats·top·autodrive·tclose·room·host·name)
     const gq = this.params = new URLSearchParams(location.search);
     // 게임 설정(시작화면 토글 → opts, URL 파라미터가 있으면 우선: ?hard=0 ?traffic=0)
@@ -219,15 +218,12 @@ export class Game {
     this.samples = track.samples;
     this.trackWidth = track.width;
     this.river = track.river;
-    // 도로 메시는 쉼터 구간 직선화(아래) 이후에 생성한다
     // 우측 통행: 주행 가능한 측면 범위(중앙분리대 ~ 우측 배리어).
     // 왕복 8차선 — 플레이어·AI 트래픽은 우측 4차선, 좌측 4차선은 장식 대향 차량.
     // 차 반폭(~1.1)+여유 — 1차로 중심(lat 2.0)에 정상적으로 올라탈 수 있어야 한다
     this.laneMin = MEDIAN_HALF + 1.15;              // = 1.65, 분리대 연석에 안 닿는 한계
     this.laneMax = track.width / 2 - 1.2;           // 우측 갓길 직전
     this.laneCenter = (this.laneMin + this.laneMax) / 2;
-    // 졸음쉼터 위치: 루트 20~60% 중 가장 직선이면서 다리(강) 위가 아닌 구간.
-    // (플랫폼이 긴 직사각형이라 곡선 구간에 걸리면 도로를 덮어버림)
     const nS = track.samples.length;
     // 샘플 간 평균 간격(m) — 구간 폭(미터)을 샘플 수로 환산하는 기준
     let trackLen = 0;
@@ -240,27 +236,6 @@ export class Game {
     this.startIdx = Math.max(8, Math.round(45 / segLen));
     this.scene.add(buildStartLine(track.samples, track.width, this.startIdx));
     this.scene.add(buildStartLine(track.samples, track.width, nS - 10)); // 결승선
-    const spanBody = Math.round(40 / segLen);   // 쉼터 본체 z±40m
-    const spanRamp = Math.round(80 / segLen);   // 램프 끝 z±80m
-    const onBridge = (i) => {
-      const x = track.samples[Math.max(0, Math.min(nS - 1, i))].pos.x;
-      return x > this.river.x0 - 110 && x < this.river.x1 + 110;
-    };
-    let restIdx = Math.floor(nS * 0.35);
-    let bestCurve = Infinity;
-    for (let i = Math.floor(nS * 0.2); i < Math.floor(nS * 0.6); i++) {
-      if (onBridge(i - spanRamp) || onBridge(i) || onBridge(i + spanRamp)) continue;
-      let curve = 0;
-      for (let k = -spanRamp; k < spanRamp; k++) {
-        const ta = track.samples[Math.max(0, Math.min(nS - 1, i + k))].tangent;
-        const tb = track.samples[Math.max(0, Math.min(nS - 1, i + k + 1))].tangent;
-        curve += 1 - ta.dot(tb);
-      }
-      if (curve < bestCurve) { bestCurve = curve; restIdx = i; }
-    }
-    // 시드에 따라 "가장 직선인 구간"도 S커브일 수 있다 — 쉼터 창을 직선으로
-    // 눌러붙인 뒤에 도로 메시를 만들어 진입로가 항상 곧게 뻗게 한다
-    straightenTrackWindow(track.samples, restIdx, Math.round(130 / segLen));
     const roadMesh = buildRoadMesh(track.samples, track.width);
     // 노을: 물웅덩이(roughnessMap 매끈 패치)가 밝은 하늘을 그대로 비추면 과함
     if (dusk) roadMesh.material.envMapIntensity = 0.35;
@@ -272,10 +247,6 @@ export class Game {
     this.scene.add(roadMesh);
     // 왕복 8차선: 중앙분리대(뉴저지 방호벽+LED)가 대향 차로와 주행 차로를 가른다
     this.scene.add(buildMedian(track.samples));
-    this.restIdx = restIdx;
-    this.restOuter = 30;          // 졸음쉼터 구간에서 허용되는 우측 최대 이격(확장 플랫폼)
-    this.restSpan = spanBody;     // 본체 구간 인덱스 반경
-    this.restRampSpan = spanRamp; // 램프 끝까지의 반경 — 이 사이에서 허용 폭이 선형 테이퍼
     this.segLen = segLen;
 
     // 분기 루트: 다리 직후 우측 진출 램프. 노면·비주얼은 유지하되 사용자 결정으로
@@ -288,8 +259,7 @@ export class Game {
     // 진출차로 판정용: 본선 가장자리 lat(이 선을 넘어야 분기 진입으로 본다)
     this.branchEdgeLat = track.width / 2 - 0.25;
     this.branchWinN = this.branch ? Math.round(this.branch.approachLen / segLen) + 3 : 0;
-    // push: 쉼터 구간은 건물을 없애지 않고 플랫폼(중심선 기준 ~32.5m) 뒤로 물려 세운다
-    const gaps = [{ side: 1, idx: restIdx, halfSpan: spanRamp + 3, parapetSpan: spanRamp, push: 37 }];
+    const gaps = [];
     let branchCoarse = null;
     let branchGroup = null;
     if (this.branch) {
@@ -333,7 +303,6 @@ export class Game {
 
     const env = buildEnvironment(this.scene, rng, track.samples, this.palette, track.width,
       gaps, track.river, branchCoarse);
-    buildRestArea(this.scene, track.samples, restIdx); // 졸음쉼터(우측 장식)
     // 분기 가로등 헤드도 실광원 풀에 합류 — 분기 주행 중에도 노면이 밝게 따라온다
     this.lampHeads = branchGroup?.userData.lampHeads.length
       ? env.lampHeads.concat(branchGroup.userData.lampHeads)
@@ -430,17 +399,6 @@ export class Game {
     this.flash = null;     // 중앙 팝업 { t, label, sub?, close? }
 
     this.currentSampleIdx = 0;
-
-    // 개발·검증: ?rest=1 → 졸음쉼터 직전에서 시작
-    if (this.params.get('rest') === '1') {
-      const ri = Math.max(0, restIdx - Math.round(40 / segLen));
-      const rs = track.samples[ri];
-      this.currentSampleIdx = ri;
-      this.car.placeAt(
-        rs.pos.clone().addScaledVector(rs.left, this.laneCenter),
-        Math.atan2(rs.tangent.x, rs.tangent.z)
-      );
-    }
     // 개발·검증: ?branch=1 → 분기 진출점 직전에서 시작 / ?branch=N(≥2) → 분기 샘플 N에서 시작
     const branchParam = this.params.get('branch');
     if (this.branch && branchParam === '1') {
@@ -751,7 +709,7 @@ export class Game {
       r.update();
       // 원격 차에도 도로 경계 클램프 — 분리대는 물리 벽이 아니라 수학 클램프라
       // 스프링 오버슈트/보간이 분리대 메시를 뚫고 보이는 현상을 여기서 막는다.
-      // (우측 한계는 진출차로·쉼터 확장 때문에 느슨하게 30)
+      // (우측 한계는 진출차로 확장 가능성 때문에 느슨하게 30)
       const nr = this.nearestSampleOf(
         this.samples, r._idx ?? this.currentSampleIdx, 200, r.body.position);
       r._idx = nr.idx;
@@ -1139,19 +1097,11 @@ export class Game {
       this.world.step(1 / 60, dt, 3);             // 강체 적분(충돌 해결)
 
       // 플레이어: 도로 폭 안으로 클램프(중앙 넘기 가능, 가장자리만 배리어) + 동기화.
-      // 졸음쉼터·분기 진출 구간에선 우측 한계를 넓혀 진입 가능.
+      // 분기 진출 구간(개방 시)에선 우측 한계를 넓혀 진입 가능.
       this.car.sync();
       if (!this.onBranch) {
         this.findNearestSample();
-        const di = Math.abs(this.currentSampleIdx - this.restIdx); // 개방 트랙: 절대 거리
-        // 쉼터 본체는 전체 폭, 램프 구간은 도로 쪽으로 선형 테이퍼(스무스 진입/퇴출)
         let maxRight = this.laneMax;
-        if (di < this.restSpan) {
-          maxRight = this.restOuter;
-        } else if (di < this.restRampSpan) {
-          const t = (di - this.restSpan) / (this.restRampSpan - this.restSpan);
-          maxRight = this.restOuter + (this.laneMax - this.restOuter) * t;
-        }
         // 분기 진출 창: 진출차로가 열린 만큼만 우측을 열고, 차가 본선 가장자리
         // 실선을 실제로 넘어 차선에 올라타면 분기 모드로 전환(실도로 진출 방식).
         // 폐쇄 시엔 이 블록을 건너뛰어 우측이 안 열림 → 본선 갓길에서 막힌다.
