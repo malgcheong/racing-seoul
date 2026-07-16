@@ -167,6 +167,58 @@ body {
 .select-btns { display: flex; gap: 12px; align-items: center; margin-top: 26px; }
 .select-btns .btn-big { margin-top: 0; min-width: 240px; width: auto; }
 
+/* ---------- 맵 선택 카드 (차량 카드와 동일 프레임, 썸네일은 CSS 하늘) ---------- */
+.map-cards {
+  display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
+  width: min(920px, 94vw);
+}
+.map-card {
+  flex: 1 1 300px; max-width: 420px; background: var(--panel);
+  border-radius: 16px; overflow: hidden; border: 2px solid transparent;
+  cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s;
+}
+.map-card:hover { transform: translateY(-3px); }
+.map-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 12px 40px rgba(255, 180, 84, .18);
+}
+.map-thumb {
+  width: 100%; aspect-ratio: 16 / 10; position: relative; overflow: hidden;
+}
+/* 도시 스카이라인 실루엣 + 도로 소실점 — 두 썸네일 공통 하단 */
+.map-thumb::after {
+  content: ''; position: absolute; inset: auto 0 0 0; height: 34%;
+  background:
+    linear-gradient(75deg, transparent 46.5%, rgba(255,220,150,.55) 47%, rgba(255,220,150,.55) 48%, transparent 48.5%),
+    linear-gradient(105deg, transparent 51.5%, rgba(255,90,70,.5) 52%, rgba(255,90,70,.5) 53%, transparent 53.5%),
+    linear-gradient(180deg, transparent 0%, #05070f 55%);
+}
+.thumb-night {
+  background:
+    radial-gradient(1.5px 1.5px at 18% 22%, #fff 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 34% 41%, #dfe8ff 50%, transparent 51%),
+    radial-gradient(1.6px 1.6px at 57% 18%, #fff 50%, transparent 51%),
+    radial-gradient(1.1px 1.1px at 71% 33%, #cfe0ff 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 86% 24%, #fff 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 44% 12%, #eef 50%, transparent 51%),
+    linear-gradient(180deg, #060a1c 0%, #0c1430 55%, #1a2547 100%);
+}
+.thumb-moon {
+  position: absolute; top: 16%; right: 16%; width: 34px; height: 34px;
+  border-radius: 50%; background: #f4f0e2;
+  box-shadow: 0 0 24px 6px rgba(244, 240, 226, .45);
+}
+.thumb-dusk {
+  background: linear-gradient(180deg, #3a2b5e 0%, #8a3f5c 42%, #e2653c 72%, #f7a03f 100%);
+}
+.thumb-sun {
+  position: absolute; bottom: 30%; left: 50%; transform: translateX(-50%);
+  width: 46px; height: 46px; border-radius: 50%;
+  background: radial-gradient(circle, #ffd98a 0%, #ff9b3d 70%);
+  box-shadow: 0 0 34px 10px rgba(255, 155, 61, .55);
+}
+.map-card .car-tag { white-space: normal; }
+
 /* ---------- 생성 화면 ---------- */
 .gen-wrap {
   height: 100%; display: flex; flex-direction: column;

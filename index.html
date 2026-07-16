@@ -105,6 +105,34 @@
     </div>
   </section>
 
+  <!-- 1.7 맵 선택 화면 (노을/밤 — 싱글 전용, 멀티는 시드 동기 랜덤) -->
+  <section id="screen-map" class="screen">
+    <div class="select-wrap">
+      <h2 class="select-title">맵 선택</h2>
+      <p class="select-sub">달릴 하늘을 골라보세요.</p>
+      <div class="map-cards">
+        <div class="map-card selected" data-map="night">
+          <div class="map-thumb thumb-night"><span class="thumb-moon"></span></div>
+          <div class="car-info">
+            <div class="car-name">한밤의 한강</div>
+            <div class="car-tag">별과 달빛 아래, 도시의 불빛을 끼고 달리는 심야 질주</div>
+          </div>
+        </div>
+        <div class="map-card" data-map="dusk">
+          <div class="map-thumb thumb-dusk"><span class="thumb-sun"></span></div>
+          <div class="car-info">
+            <div class="car-name">노을의 한강</div>
+            <div class="car-tag">서쪽 석양을 향해 — 주황빛 하늘과 낮은 구름</div>
+          </div>
+        </div>
+      </div>
+      <div class="select-btns">
+        <button id="btn-map-back" class="btn btn-ghost" type="button">← 뒤로</button>
+        <button id="btn-map-confirm" class="btn btn-primary btn-big" type="button">이 맵으로 주행 시작</button>
+      </div>
+    </div>
+  </section>
+
   <!-- 2. 로딩 화면 -->
   <section id="screen-generating" class="screen">
     <div class="gen-wrap">

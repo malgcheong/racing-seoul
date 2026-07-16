@@ -15,7 +15,6 @@ import { NetClient } from '../net/client.js';
 import { RemoteCar } from './remoteCar.js';
 import { Minimap } from './minimap.js';
 import { ParticleSystem } from './particles.js';
-import { Rain } from './rain.js';
 import { buildEnvironment } from '../map/decorations.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
@@ -75,7 +74,7 @@ export class Game {
     this.carModel = opts.carModel || 'car7'; // 선택된 차량 에셋 이름
     // URL 파라미터 스냅샷 — 게임 생성 시점 기준으로 한 번만 파싱해 전역에서 재사용
     // (개발·검증 파라미터 목록은 README 격인 메모리/주석 참고: seed·at·branch·
-    //  cam·tod·wx·hard·traffic·dpr·stats·top·autodrive·tclose·room·host·name)
+    //  cam·tod·hard·traffic·dpr·stats·top·autodrive·tclose·room·host·name)
     const gq = this.params = new URLSearchParams(location.search);
     // 게임 설정(시작화면 토글 → opts, URL 파라미터가 있으면 우선: ?hard=0 ?traffic=0)
     this.hardMode = gq.get('hard') !== null ? gq.get('hard') !== '0' : (opts.hardMode ?? true);
@@ -126,10 +125,7 @@ export class Game {
 
     this.scene = new THREE.Scene();
     // 야간: 안개(원경 깊이감). 배경 산맥까지 바닥이 이어지고 산은 헤이즈에 녹아들도록.
-    // 비 오는 밤은 헤이즈가 짙다
-    this.scene.fog = this.palette.rain
-      ? new THREE.Fog(this.palette.fog, 150, 2100)
-      : new THREE.Fog(this.palette.fog, 220, 2800);
+    this.scene.fog = new THREE.Fog(this.palette.fog, 220, 2800);
 
     this.camera = new THREE.PerspectiveCamera(
       BASE_FOV,
@@ -176,14 +172,12 @@ export class Game {
       this.skyDome.add(dimStars);
       this.skyDome.add(makeDuskSun(this.sunDir));
       this.skyDome.add(makeDuskClouds(rng, this.sunDir));
-    } else if (!this.palette.rain) {
+    } else {
       this.skyDome.add(makeStars());
       this.skyDome.add(makeMoon(this.sunDir));
-    } // 비 오는 밤: 흐린 하늘 — 별·달 없음
-    if (!this.palette.rain) {
-      this.skyLife = makeSkyLife(); // 비행기 점멸등 + 유성
-      this.skyDome.add(this.skyLife.group);
     }
+    this.skyLife = makeSkyLife(); // 비행기 점멸등 + 유성
+    this.skyDome.add(this.skyLife.group);
     this.scene.add(this.skyDome);
 
     // 하늘을 환경맵으로 구워 젖은 노면·차체에 은은한 시트(sheen) 반사
@@ -211,7 +205,6 @@ export class Game {
     this.composer.addPass(new OutputPass());
 
     this.particles = new ParticleSystem(this.scene);
-    this.rain = this.palette.rain ? new Rain(this.scene) : null;
 
     // 트랙 + 장식 + 추억 오브젝트 (편도 루트: 출발 → 강 다리 → 목적지)
     const track = generateTrack(rng);
@@ -239,11 +232,6 @@ export class Game {
     const roadMesh = buildRoadMesh(track.samples, track.width);
     // 노을: 물웅덩이(roughnessMap 매끈 패치)가 밝은 하늘을 그대로 비추면 과함
     if (dusk) roadMesh.material.envMapIntensity = 0.35;
-    // 비: 젖은 노면 — 매끈해져 가로등·네온이 길게 비친다 (밤 전용이라 과반사 없음)
-    if (this.palette.rain) {
-      roadMesh.material.roughness = 0.5;
-      roadMesh.material.envMapIntensity = 0.85;
-    }
     this.scene.add(roadMesh);
     // 왕복 8차선: 중앙분리대(뉴저지 방호벽+LED)가 대향 차로와 주행 차로를 가른다
     this.scene.add(buildMedian(track.samples));
@@ -1290,7 +1278,6 @@ export class Game {
     this.envUpdate?.(this.worldTime, dt);
     this.skyLife?.update(this.worldTime, dt);
     this.particles.update(dt);
-    this.rain?.update(dt, this.camera.position);
     this.updateCamera();
     this.updateCockpit(dt);
     this.updateSun();
@@ -1343,7 +1330,6 @@ export class Game {
     window.removeEventListener('keydown', this.keydown);
     window.removeEventListener('keyup', this.keyup);
     window.removeEventListener('resize', this.onResize);
-    this.rain?.dispose();
     this.traffic?.dispose();
     if (!this.netHandoff) this.net?.close(); // 재대결: 소켓은 새 게임이 인계
     for (const r of this.remotes?.values() ?? []) r.dispose();
