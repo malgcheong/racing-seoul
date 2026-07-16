@@ -380,7 +380,9 @@ export class Game {
     this.traffic = !this.trafficOn ? null : new TrafficSystem(this.scene, this.samples, {
       world: this.world,
       laneCenters: [laneW * 0.5, laneW * 1.5, laneW * 2.5, laneW * 3.5], // +2,+6,+10,+14
-      count: 16,
+      // 실차 트래픽(6~14k폴리/대)은 자체제작 저폴리보다 훨씬 무겁다 — 대수를 낮춰
+      // 폴리·드로우콜 총량을 관리(?traffic 토글로 완전 off도 가능)
+      count: 10,
       river: track.river, // 다리 구간 정체(구간별 밀도감)용
       debugClose: this.params.get('tclose') === '1',
       puppet: !!this.mpRoom && !this.mpHost, // 게스트: 방장 스냅샷 재생
