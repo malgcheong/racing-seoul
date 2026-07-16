@@ -44,6 +44,7 @@ const CARS = [
 const state = {
   game: null,
   selectedCar: 'car7',
+  selectedMap: 'night', // 맵 선택 화면: 'night' | 'dusk'
   previews: [],
 };
 
@@ -138,16 +139,15 @@ async function generateAndPlay(seedOverride = null, rematchInfo = null) {
   else if (!state.lastSeed && q.get('seed')) seed = q.get('seed');
   else seed = String(Date.now());
   state.lastSeed = seed;
-  // 시간대: 시드 기반으로 밤/노을이 섞여 나온다 (?tod=dusk|night 로 강제 가능) —
-  // 같은 시드 = 같은 시간대라 "같은 맵 다시"에서도 분위기가 그대로 재현된다
+  // 시간대: 싱글은 맵 선택 화면의 선택(노을/밤)을 따르고, 멀티는 시드 기반
+  // 랜덤(같은 시드 = 같은 시간대 → 전원 동일 무드). ?tod=dusk|night 로 강제 가능.
   const prng = createRng(seed + '::palette');
+  const todRand = prng() < 0.45; // 멀티 동기화용 — 항상 소비해 시드 결정성 유지
   const todParam = q.get('tod');
-  const dusk = todParam ? todParam === 'dusk' : prng() < 0.45;
+  const dusk = todParam
+    ? todParam === 'dusk'
+    : (q.get('room') ? todRand : state.selectedMap === 'dusk');
   const palette = dusk ? duskCityPalette(prng) : nightCityPalette(prng);
-  // 비 날씨: 밤에만 시드 확률 ~25% (?wx=rain|clear 강제). 팔레트 난수 소비 뒤에
-  // 뽑아야 기존 시드들의 색감이 안 바뀐다. 같은 시드 = 같은 날씨(멀티 동기화)
-  const wxParam = q.get('wx');
-  palette.rain = !dusk && (wxParam ? wxParam === 'rain' : prng() < 0.25);
   startGame(seed, palette, rematchInfo);
 }
 
@@ -415,7 +415,17 @@ $('#btn-select-back').addEventListener('click', () => {
   disposePreviews();
   showScreen('#screen-start');
 });
-$('#btn-select-confirm').addEventListener('click', () => generateAndPlay());
+// 차량 확정 → 맵(하늘) 선택 → 주행 시작
+$('#btn-select-confirm').addEventListener('click', () => showScreen('#screen-map'));
+$('#btn-map-back').addEventListener('click', () => showScreen('#screen-select'));
+$('#btn-map-confirm').addEventListener('click', () => generateAndPlay());
+document.querySelectorAll('.map-card').forEach((el) => {
+  el.addEventListener('click', () => {
+    state.selectedMap = el.dataset.map;
+    document.querySelectorAll('.map-card')
+      .forEach((c) => c.classList.toggle('selected', c === el));
+  });
+});
 $('#btn-restart').addEventListener('click', () => generateAndPlay()); // 새 시드 = 새로운 도시
 $('#btn-same').addEventListener('click', () => generateAndPlay(state.lastSeed)); // 시드 재사용
 $('#btn-rematch').addEventListener('click', () => {
