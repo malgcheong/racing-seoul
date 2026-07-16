@@ -61,6 +61,11 @@ body {
 }
 .opt input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 .opt-sub { color: var(--muted); font-size: 11px; opacity: 0.8; }
+.opt-select {
+  background: rgba(10, 14, 26, 0.8); border: 1px solid #2a3354; border-radius: 8px;
+  color: #e8ecf8; font-size: 13px; padding: 4px 8px; cursor: pointer; outline: none;
+}
+.opt-select:focus { border-color: var(--accent); }
 
 /* 멀티플레이 로비 */
 .start-btns { display: flex; gap: 12px; justify-content: center; }

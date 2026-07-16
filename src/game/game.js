@@ -28,6 +28,18 @@ import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds 
 const BASE_FOV = 68;
 const MAX_SPEED_ABS = 36;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
 
+// 품질 프리셋: 성능 지렛대 3종만 조절 —
+//  dpr(픽셀비율, 화면 픽셀 수가 제곱으로 늘어 최대 비용) / 그림자맵 해상도 + 갱신 주기
+//  (깊이 패스가 씬 전체 재렌더라 비쌈) / 트래픽 대수(실차 6~14k폴리).
+//  bloom·비네트는 반해상도라 저렴해 프리셋에서 제외(무드 유지).
+//  ※ traffic은 싱글에서만 프리셋 적용 — 멀티는 방장 스냅샷 인덱스 일치 위해 고정.
+const QUALITY = {
+  low:    { dpr: 1.0,  shadow: 1024, shadowEvery: 3, traffic: 6 },
+  medium: { dpr: 1.25, shadow: 2048, shadowEvery: 2, traffic: 10 },
+  high:   { dpr: 1.6,  shadow: 4096, shadowEvery: 1, traffic: 16 },
+};
+const MP_TRAFFIC = 10; // 멀티 고정 트래픽 대수
+
 // 화면 가장자리를 살짝 어둡게 (비네트)
 const VignetteShader = {
   uniforms: {
@@ -70,6 +82,14 @@ export class Game {
     this.hardMode = gq.get('hard') !== null ? gq.get('hard') !== '0' : (opts.hardMode ?? true);
     this.trafficOn = gq.get('traffic') !== null ? gq.get('traffic') !== '0' : (opts.traffic ?? true);
 
+    // 품질 프리셋(시작화면 → opts.quality, URL ?q=low|medium|high|auto 우선).
+    // 'auto'는 medium으로 시작해 첫 몇 초 FPS를 재고 자동 강등한다.
+    const qParam = gq.get('q');
+    const qPick = ['low', 'medium', 'high', 'auto'].includes(qParam) ? qParam
+      : ['low', 'medium', 'high', 'auto'].includes(opts.quality) ? opts.quality : 'medium';
+    this.autoQuality = qPick === 'auto';
+    this.quality = QUALITY[this.autoQuality ? 'medium' : qPick];
+
     this.running = false;
     this.disposed = false;
     this.input = { forward: false, backward: false, left: false, right: false, drift: false, highBeam: false };
@@ -88,16 +108,19 @@ export class Game {
     // 렌더러/씬
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-    // 성능: 고DPI에서 픽셀 수가 제곱으로 늘어 포스트프로세싱 비용이 커짐 → 1.5로 캡
-    // (?dpr=1 로 더 낮춰 테스트 가능)
+    // 성능: 고DPI에서 픽셀 수가 제곱으로 늘어 비용이 커짐. 품질 프리셋 dpr로 캡
+    // (?dpr= 파라미터가 있으면 개발용으로 우선)
     const dprParam = parseFloat(this.params.get('dpr'));
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, Number.isFinite(dprParam) ? dprParam : 1.5));
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, Number.isFinite(dprParam) ? dprParam : this.quality.dpr));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap; // Soft 대비 저렴(야간이라 차이 미미)
     // 그림자 깊이 패스는 씬 전체를 한 번 더 그린다 — 격프레임 갱신으로 절반 절약.
     // (태양이 차를 따라가며 미세 이동하는 정도라 한 프레임 지연은 티가 안 남)
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
+    this._shadowEvery = this.quality.shadowEvery; // N프레임마다 그림자 깊이 패스 갱신
+    this._shadowTick = 0;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.95;
     this.container.appendChild(this.renderer.domElement);
@@ -130,7 +153,7 @@ export class Game {
       ? new THREE.Vector3(-0.86, 0.16, 0.28).normalize()
       : new THREE.Vector3(0.5, 0.72, 0.34).normalize();
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(this.quality.shadow, this.quality.shadow);
     sun.shadow.camera.left = -95;
     sun.shadow.camera.right = 95;
     sun.shadow.camera.top = 95;
@@ -380,9 +403,9 @@ export class Game {
     this.traffic = !this.trafficOn ? null : new TrafficSystem(this.scene, this.samples, {
       world: this.world,
       laneCenters: [laneW * 0.5, laneW * 1.5, laneW * 2.5, laneW * 3.5], // +2,+6,+10,+14
-      // 실차 트래픽(6~14k폴리/대)은 자체제작 저폴리보다 훨씬 무겁다 — 대수를 낮춰
-      // 폴리·드로우콜 총량을 관리(?traffic 토글로 완전 off도 가능)
-      count: 10,
+      // 실차 트래픽(6~14k폴리/대)은 무겁다 — 품질 프리셋으로 대수 관리(싱글).
+      // 멀티는 방장 스냅샷 배열 인덱스가 양쪽 일치해야 하므로 고정값.
+      count: this.mpRoom ? MP_TRAFFIC : this.quality.traffic,
       river: track.river, // 다리 구간 정체(구간별 밀도감)용
       debugClose: this.params.get('tclose') === '1',
       puppet: !!this.mpRoom && !this.mpHost, // 게스트: 방장 스냅샷 재생
@@ -1319,10 +1342,28 @@ export class Game {
     this.updateSun();
     this.updateLampLights();
     // 그림자 격프레임 갱신 (autoUpdate=false 페어)
-    this._shadowFlip = !this._shadowFlip;
-    if (this._shadowFlip) this.renderer.shadowMap.needsUpdate = true;
+    this._shadowTick = (this._shadowTick + 1) % this._shadowEvery;
+    if (this._shadowTick === 0) this.renderer.shadowMap.needsUpdate = true;
     if (this.showStats) this.renderer.info.reset();
     this.composer.render();
+
+    // 자동 품질: 주행 시작 후 첫 4초 FPS를 재고 낮으면 해상도·그림자를 강등.
+    // (트래픽 대수는 이미 스폰돼 런타임 변경이 까다로우니 dpr·그림자 주기만 조정)
+    if (this.autoQuality && this.running && !this._autoDone) {
+      this._autoAcc = (this._autoAcc || 0) + dt;
+      this._autoN = (this._autoN || 0) + 1;
+      if (this._autoAcc >= 4) {
+        this._autoDone = true;
+        const fps = this._autoN / this._autoAcc;
+        let dpr = null;
+        if (fps < 42) { dpr = 1.0; this._shadowEvery = 3; }
+        else if (fps < 55) { dpr = 1.25; this._shadowEvery = 2; }
+        if (dpr) {
+          this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dpr));
+          this.composer.setSize(this.container.clientWidth, this.container.clientHeight);
+        }
+      }
+    }
 
     if (this.showStats) {
       // FPS: 최근 30프레임 이동평균
