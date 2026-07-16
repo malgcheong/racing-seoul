@@ -191,22 +191,25 @@ export class Game {
     pmrem.dispose();
 
     // 포스트프로세싱: bloom(빛 번짐) + 비네트
-    // NPR 평가 모드(?npr=1): 씬 뎁스를 받아 잉크 엣지 패스를 끼운다
+    // NPR 평가 모드(?npr=1): 씬을 전용 RT(색+뎁스)에 그리고 컴포저는 읽기만 —
+    // 컴포저 핑퐁 버퍼에 뎁스를 부착하면 뒤 패스가 그 버퍼에 그릴 때
+    // "샘플 중 텍스처=렌더 대상" 피드백 루프로 화면이 깜빡인다(GL_INVALID_OPERATION)
     this.npr = this.params.get('npr') === '1';
     this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
     if (this.npr) {
-      // RenderPass는 composer의 readBuffer(renderTarget2)에 씬을 그린다 —
-      // 거기에 뎁스텍스처를 붙여 엣지 패스가 실루엣을 뽑을 수 있게 한다
       const ds = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-      const depthTex = new THREE.DepthTexture(ds.x, ds.y);
-      this.composer.renderTarget2.depthTexture = depthTex;
+      this.nprRT = new THREE.WebGLRenderTarget(ds.x, ds.y, {
+        depthTexture: new THREE.DepthTexture(ds.x, ds.y),
+      });
       this.edgePass = new ShaderPass(InkEdgeShader);
-      this.edgePass.uniforms.tDepth.value = depthTex;
+      this.edgePass.uniforms.tScene.value = this.nprRT.texture;
+      this.edgePass.uniforms.tDepth.value = this.nprRT.depthTexture;
       this.edgePass.uniforms.resolution.value.copy(ds);
       this.edgePass.uniforms.cameraNear.value = this.camera.near;
       this.edgePass.uniforms.cameraFar.value = this.camera.far;
-      this.composer.addPass(this.edgePass);
+      this.composer.addPass(this.edgePass); // 씬 렌더는 renderFrame()에서 수동
+    } else {
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
     }
     this.bloomPass = new UnrealBloomPass(
       // 절반 해상도 — 블룸은 블러라 반해상도로도 차이가 안 보이고 비용은 크게 줆
@@ -450,17 +453,37 @@ export class Game {
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
       this.composer.setSize(w, h);
-      if (this.edgePass) {
-        this.edgePass.uniforms.resolution.value.copy(
-          this.renderer.getDrawingBufferSize(new THREE.Vector2()));
-      }
+      this._resizeNprRT();
     };
     window.addEventListener('resize', this.onResize);
 
     // 첫 프레임 렌더 (카운트다운 배경)
     this.updateCamera(true);
     this.updateSun();
+    this.renderFrame();
+  }
+
+  // NPR: 씬을 전용 RT(색+뎁스)에 먼저 그리고 컴포저(엣지→블룸→비네트)는 읽기만
+  renderFrame() {
+    if (this.npr) {
+      this.renderer.setRenderTarget(this.nprRT);
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.setRenderTarget(null);
+    }
     this.composer.render();
+  }
+
+  // NPR RT는 뎁스텍스처 크기를 함께 바꿔야 해서 리사이즈 시 재생성이 안전
+  _resizeNprRT() {
+    if (!this.nprRT) return;
+    const ds = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.nprRT.dispose();
+    this.nprRT = new THREE.WebGLRenderTarget(ds.x, ds.y, {
+      depthTexture: new THREE.DepthTexture(ds.x, ds.y),
+    });
+    this.edgePass.uniforms.tScene.value = this.nprRT.texture;
+    this.edgePass.uniforms.tDepth.value = this.nprRT.depthTexture;
+    this.edgePass.uniforms.resolution.value.copy(ds);
   }
 
   bindInput() {
@@ -1309,7 +1332,7 @@ export class Game {
     this._shadowTick = (this._shadowTick + 1) % this._shadowEvery;
     if (this._shadowTick === 0) this.renderer.shadowMap.needsUpdate = true;
     if (this.showStats) this.renderer.info.reset();
-    this.composer.render();
+    this.renderFrame();
 
     // 자동 품질: 주행 시작 후 첫 4초 FPS를 재고 낮으면 해상도·그림자를 강등.
     // (트래픽 대수는 이미 스폰돼 런타임 변경이 까다로우니 dpr·그림자 주기만 조정)
@@ -1325,6 +1348,7 @@ export class Game {
         if (dpr) {
           this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dpr));
           this.composer.setSize(this.container.clientWidth, this.container.clientHeight);
+          this._resizeNprRT();
         }
       }
     }
