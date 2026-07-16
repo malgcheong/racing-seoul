@@ -19,6 +19,7 @@ import { buildEnvironment } from '../map/decorations.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld, clampToRoad } from './physics.js';
+import { toonifyScene, InkEdgeShader } from './npr.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds } from './sky.js';
@@ -190,8 +191,23 @@ export class Game {
     pmrem.dispose();
 
     // 포스트프로세싱: bloom(빛 번짐) + 비네트
+    // NPR 평가 모드(?npr=1): 씬 뎁스를 받아 잉크 엣지 패스를 끼운다
+    this.npr = this.params.get('npr') === '1';
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    if (this.npr) {
+      // RenderPass는 composer의 readBuffer(renderTarget2)에 씬을 그린다 —
+      // 거기에 뎁스텍스처를 붙여 엣지 패스가 실루엣을 뽑을 수 있게 한다
+      const ds = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      const depthTex = new THREE.DepthTexture(ds.x, ds.y);
+      this.composer.renderTarget2.depthTexture = depthTex;
+      this.edgePass = new ShaderPass(InkEdgeShader);
+      this.edgePass.uniforms.tDepth.value = depthTex;
+      this.edgePass.uniforms.resolution.value.copy(ds);
+      this.edgePass.uniforms.cameraNear.value = this.camera.near;
+      this.edgePass.uniforms.cameraFar.value = this.camera.far;
+      this.composer.addPass(this.edgePass);
+    }
     this.bloomPass = new UnrealBloomPass(
       // 절반 해상도 — 블룸은 블러라 반해상도로도 차이가 안 보이고 비용은 크게 줆
       new THREE.Vector2(this.container.clientWidth / 2, this.container.clientHeight / 2),
@@ -422,6 +438,9 @@ export class Game {
     this.showStats = this.params.get('stats') === '1';
     if (this.showStats) this.renderer.info.autoReset = false;
 
+    // NPR 평가: 씬이 전부 조립된 뒤 일괄 Toon 변환 (기본 모드에선 아무것도 안 함)
+    if (this.npr) toonifyScene(this.scene);
+
     this.bindInput();
     this.onResize = () => {
       if (this.disposed) return;
@@ -431,6 +450,10 @@ export class Game {
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
       this.composer.setSize(w, h);
+      if (this.edgePass) {
+        this.edgePass.uniforms.resolution.value.copy(
+          this.renderer.getDrawingBufferSize(new THREE.Vector2()));
+      }
     };
     window.addEventListener('resize', this.onResize);
 
