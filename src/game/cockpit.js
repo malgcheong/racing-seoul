@@ -56,16 +56,9 @@ const VARIANTS = {
   // BlackSnow 3종: 허브 위치·칼럼각은 Blender에서 실측. eye.x는 각 차의 실제 핸들 x.
   // S63은 순정 발광 계기판(vivace 스크린) 보유 → 캔버스 클러스터 불필요.
   s63: { asset: 'cockpitS63', tilt: -0.42, eye: { x: 0.38, y: 1.18, z: -0.20 } },
-  // SL63·M4는 무텍스처(로더를 멈추는 불량 임베드 텍스처 회피)라 계기판이
-  // 어두움 → sf처럼 캔버스 클러스터를 스티어링 칼럼 위에 얹는다.
-  sl63: {
-    asset: 'cockpitSl63', tilt: -0.42, eye: { x: 0.37, y: 1.13, z: -0.31 },
-    cluster: { pos: [0.37, 0.98, 0.26], scale: 0.75 },
-  },
-  m4: {
-    asset: 'cockpitM4', tilt: -0.39, eye: { x: 0.29, y: 1.18, z: -0.07 },
-    cluster: { pos: [0.29, 1.03, 0.50], scale: 0.75 },
-  },
+  // 캔버스 클러스터는 사용자 결정으로 미사용 — 순정 대시 그대로
+  sl63: { asset: 'cockpitSl63', tilt: -0.42, eye: { x: 0.37, y: 1.13, z: -0.31 } },
+  m4: { asset: 'cockpitM4', tilt: -0.39, eye: { x: 0.29, y: 1.18, z: -0.07 } },
 };
 const BY_CAR = { car7: '918', car10: 's63', car11: 'sl63', car12: 'm4' };
 
