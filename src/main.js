@@ -273,6 +273,7 @@ function startGame(seed, palette, rematchInfo = null) {
     carModel: state.selectedCar,
     hardMode: $('#opt-hard').checked,
     traffic: $('#opt-traffic').checked,
+    quality: $('#opt-quality').value, // low|medium|high|auto
     rematch: rematchInfo,
   });
   state.game = game;
@@ -286,6 +287,12 @@ for (const [id, key] of [['#opt-hard', 'nd_hard'], ['#opt-traffic', 'nd_traffic'
   const saved = localStorage.getItem(key);
   if (saved !== null) el.checked = saved === '1';
   el.addEventListener('change', () => localStorage.setItem(key, el.checked ? '1' : '0'));
+}
+// 품질 프리셋 드롭다운 (localStorage 유지, 기본 auto)
+{
+  const el = $('#opt-quality');
+  el.value = localStorage.getItem('nd_quality') || 'auto';
+  el.addEventListener('change', () => localStorage.setItem('nd_quality', el.value));
 }
 
 // ---------- 멀티플레이 로비 ----------
