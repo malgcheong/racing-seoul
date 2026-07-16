@@ -54,11 +54,12 @@ const VARIANTS = {
   },
   918: { asset: 'cockpit918', tilt: -0.5, eye: { x: DX, y: 1.02, z: 0.34 } },
   // BlackSnow 3종: 허브 위치·칼럼각은 Blender에서 실측. eye.x는 각 차의 실제 핸들 x.
-  // S63은 순정 발광 계기판(vivace 스크린) 보유 → 캔버스 클러스터 불필요.
-  s63: { asset: 'cockpitS63', tilt: -0.42, eye: { x: 0.38, y: 1.18, z: -0.20 } },
-  // 캔버스 클러스터는 사용자 결정으로 미사용 — 순정 대시 그대로
-  sl63: { asset: 'cockpitSl63', tilt: -0.42, eye: { x: 0.37, y: 1.13, z: -0.31 } },
-  m4: { asset: 'cockpitM4', tilt: -0.39, eye: { x: 0.29, y: 1.18, z: -0.07 } },
+  // eye는 핸들 중앙(허브 로고)이 화면에 들어오게 허브보다 ~0.2 높고 ~0.5 뒤
+  // (FP 카메라가 수평 정면을 보므로 시선각 ~20-22도 아래에 허브가 오도록).
+  // 캔버스 클러스터는 사용자 결정으로 미사용 — 순정 대시 그대로.
+  s63: { asset: 'cockpitS63', tilt: -0.42, eye: { x: 0.38, y: 1.13, z: -0.32 } },
+  sl63: { asset: 'cockpitSl63', tilt: -0.42, eye: { x: 0.37, y: 1.05, z: -0.38 } },
+  m4: { asset: 'cockpitM4', tilt: -0.39, eye: { x: 0.29, y: 1.10, z: -0.18 } },
 };
 const BY_CAR = { car7: '918', car10: 's63', car11: 'sl63', car12: 'm4' };
 
