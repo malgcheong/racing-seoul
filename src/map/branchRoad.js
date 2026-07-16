@@ -170,7 +170,7 @@ function branchRoadTexture() {
 }
 
 // 분기 도로 지오메트리 + 교각 + 가로등 + 진출 표지판을 묶은 그룹 생성
-export function buildBranchRoad(branch, mainSamples, mainWidth = 22, river = null) {
+export function buildBranchRoad(branch, mainSamples, mainWidth = 22, river = null, closed = false) {
   const group = new THREE.Group();
   group.userData.lampHeads = []; // 실광원 풀링용 헤드 위치(game.js가 본선 풀에 합류)
   const { samples } = branch;
@@ -377,6 +377,23 @@ export function buildBranchRoad(branch, mainSamples, mainWidth = 22, river = nul
     lastConeD = e.d;
     coneM.push(new THREE.Matrix4().makeTranslation(
       e.r.x - e.s.left.x * 0.45, e.s.pos.y + 0.27, e.r.z - e.s.left.z * 0.45));
+  }
+  // 진출로 폐쇄 배리어(사용자 결정 2026-07-16 — 직진만 결승): 램프 입구를
+  // 본선 가장자리~램프 바깥변까지 라바콘 벽으로 가로막는다(2줄). 노면은 그대로 둠.
+  if (closed) {
+    for (const targetD of [AP + 3, AP + 9]) {
+      let be = null;
+      for (const e of edges) { if (e.d >= targetD) { be = e; break; } }
+      if (!be) continue;
+      const bm = nearestMain(be.r);
+      const ix = bm.pos.x + bm.left.x * innerLimit, iz = bm.pos.z + bm.left.z * innerLimit;
+      const cnt = Math.max(3, Math.round(Math.hypot(be.r.x - ix, be.r.z - iz) / 1.0));
+      for (let k = 0; k <= cnt; k++) {
+        const t = k / cnt;
+        coneM.push(new THREE.Matrix4().makeTranslation(
+          ix + (be.r.x - ix) * t, be.s.pos.y + 0.27, iz + (be.r.z - iz) * t));
+      }
+    }
   }
   if (coneM.length) {
     const cim = new THREE.InstancedMesh(coneGeo, coneMat, coneM.length);

@@ -278,8 +278,11 @@ export class Game {
     this.restRampSpan = spanRamp; // 램프 끝까지의 반경 — 이 사이에서 허용 폭이 선형 테이퍼
     this.segLen = segLen;
 
-    // 분기 루트: 다리 직후 우측 진출 → 루프 하강 → 강변도로 크루즈 → 본선 재합류
+    // 분기 루트: 다리 직후 우측 진출 램프. 노면·비주얼은 유지하되 사용자 결정으로
+    // '폐쇄'(2026-07-16) — 진입을 막고 본선 직진만 유일한 결승 경로로 둔다.
+    // (?branch=open 으로 개발 중 임시 개방 가능)
     this.branch = generateBranchRoute(track.samples, track.river, track.width);
+    this.branchClosed = this.params.get('branch') !== 'open';
     this.onBranch = false;
     this.branchIdx = 0;
     // 진출차로 판정용: 본선 가장자리 lat(이 선을 넘어야 분기 진입으로 본다)
@@ -290,7 +293,7 @@ export class Game {
     let branchCoarse = null;
     let branchGroup = null;
     if (this.branch) {
-      branchGroup = buildBranchRoad(this.branch, track.samples, track.width, track.river);
+      branchGroup = buildBranchRoad(this.branch, track.samples, track.width, track.river, this.branchClosed);
       this.scene.add(branchGroup);
       // 올림픽대로 종점 = 대체 결승선 — 합류 후엔 강변도로 남행 반부만 달리므로 그 폭으로
       this.scene.add(buildStartLine(this.branch.samples, 7.2,
@@ -1150,8 +1153,9 @@ export class Game {
           maxRight = this.restOuter + (this.laneMax - this.restOuter) * t;
         }
         // 분기 진출 창: 진출차로가 열린 만큼만 우측을 열고, 차가 본선 가장자리
-        // 실선을 실제로 넘어 차선에 올라타면 분기 모드로 전환(실도로 진출 방식)
-        if (this.branch) {
+        // 실선을 실제로 넘어 차선에 올라타면 분기 모드로 전환(실도로 진출 방식).
+        // 폐쇄 시엔 이 블록을 건너뛰어 우측이 안 열림 → 본선 갓길에서 막힌다.
+        if (this.branch && !this.branchClosed) {
           const bofs = this.currentSampleIdx - this.branch.exitIdx;
           if (bofs > -this.branchWinN && bofs < Math.round(70 / this.segLen)) {
             // 테이퍼 진행에 비례해 우측 한계 확장, 고어 뒤엔 완전 개방
@@ -1250,8 +1254,8 @@ export class Game {
           [...this.remotes.values()].map((r) => r.group.position));
       }
 
-      // 분기 사전 안내: 출구 500m/150m 전 1회씩 (분기 미진입 상태에서만)
-      if (this.branch && !this.onBranch && !this.finished) {
+      // 분기 사전 안내: 출구 500m/150m 전 1회씩 (분기 미진입 상태에서만, 폐쇄 시 없음)
+      if (this.branch && !this.branchClosed && !this.onBranch && !this.finished) {
         const dEx = (this.branch.exitIdx - this.currentSampleIdx) * this.segLen;
         if (dEx > 0 && dEx < 500 && !this._exitN1) {
           this._exitN1 = true;
