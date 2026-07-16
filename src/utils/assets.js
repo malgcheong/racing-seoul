@@ -33,6 +33,10 @@ const FILES = {
   cockpitSf: '/assets/cockpit_sf.glb',
   // Sketchfab "Porsche 918 Spyder 2015" 실내 추출 (CC-BY) — 크레딧 표기 필요
   cockpit918: '/assets/cockpit_918.glb',
+  // BlackSnow 3종 실내 추출 (CC-BY, 차량 본체와 동일 출처) — SL63/M4는 무텍스처(불량 텍스처 회피)
+  cockpitS63: '/assets/cockpit_s63.glb',
+  cockpitSl63: '/assets/cockpit_sl63.glb',
+  cockpitM4: '/assets/cockpit_m4.glb',
 };
 
 const cache = {};
