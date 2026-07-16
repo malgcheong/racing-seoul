@@ -86,37 +86,6 @@ export function generateTrack(rng) {
   };
 }
 
-// 졸음쉼터 구간 직선화: idx±half 창의 샘플을 창 양끝을 잇는 직선(chord)에
-// 눌러붙인다. 시드에 따라 "가장 직선인 구간"조차 S커브일 수 있는데, 긴
-// 직사각형 플랫폼·램프가 곡선에 걸리면 진입이 어렵고 도로가 어색해진다.
-// 가운데 약 40%는 완전 직선, 양끝 30%씩은 smoothstep으로 원곡선에 블렌드.
-export function straightenTrackWindow(samples, idx, half) {
-  const n = samples.length;
-  const i0 = Math.max(1, idx - half);
-  const i1 = Math.min(n - 2, idx + half);
-  if (i1 - i0 < 8) return;
-  const a = samples[i0].pos, b = samples[i1].pos;
-  const dir = b.clone().sub(a);
-  const len2 = dir.lengthSq();
-  if (len2 < 1) return;
-  const E = 0.3; // 양끝 블렌드 구간 비율
-  const smooth = (x) => x * x * (3 - 2 * x);
-  for (let i = i0 + 1; i < i1; i++) {
-    const p = samples[i].pos;
-    const t = p.clone().sub(a).dot(dir) / len2;
-    const proj = a.clone().addScaledVector(dir, t);
-    const u = (i - i0) / (i1 - i0);
-    const w = u < E ? smooth(u / E) : u > 1 - E ? smooth((1 - u) / E) : 1;
-    p.lerp(proj, w);
-  }
-  // 이동한 구간(경계 한 칸 여유)의 접선·좌측 법선 재계산
-  for (let i = Math.max(1, i0 - 1); i <= Math.min(n - 2, i1 + 1); i++) {
-    const tan = samples[i + 1].pos.clone().sub(samples[i - 1].pos).normalize();
-    samples[i].tangent.copy(tan);
-    samples[i].left.set(-tan.z, 0, tan.x);
-  }
-}
-
 // 아스팔트 + 중앙 황색복선 + 차로 점선 + 양측 흰 실선 텍스처.
 // halfLanes = 방향별 차선 수 (본선 4 → 왕복 8차선, 강변도로 2 → 왕복 4차선)
 // widthM = 실제 도로 폭(m) — 라인 굵기를 미터 기준으로 그려 도로가 넓어져도
