@@ -57,9 +57,12 @@ const VARIANTS = {
   // eye는 핸들 중앙(허브 로고)이 화면에 들어오게 허브보다 ~0.2 높고 ~0.5 뒤
   // (FP 카메라가 수평 정면을 보므로 시선각 ~20-22도 아래에 허브가 오도록).
   // 캔버스 클러스터는 사용자 결정으로 미사용 — 순정 대시 그대로.
-  s63: { asset: 'cockpitS63', tilt: -0.42, eye: { x: 0.38, y: 1.13, z: -0.32 } },
-  sl63: { asset: 'cockpitSl63', tilt: -0.42, eye: { x: 0.37, y: 1.05, z: -0.38 } },
-  m4: { asset: 'cockpitM4', tilt: -0.39, eye: { x: 0.29, y: 1.10, z: -0.18 } },
+  // 주의: BlackSnow 3종의 플랫화 베이크는 918/sf와 회전 방향이 반대라
+  // tilt가 '양수'다(음수를 주면 핸들이 앞으로 엎어져 찌그러져 보임).
+  // 값 = Blender에서 실측한 칼럼각(rad): s63 24.1° / sl63 17.7° / m4 22.6°
+  s63: { asset: 'cockpitS63', tilt: 0.42, eye: { x: 0.38, y: 1.13, z: -0.32 } },
+  sl63: { asset: 'cockpitSl63', tilt: 0.31, eye: { x: 0.37, y: 1.05, z: -0.38 } },
+  m4: { asset: 'cockpitM4', tilt: 0.39, eye: { x: 0.29, y: 1.10, z: -0.18 } },
 };
 const BY_CAR = { car7: '918', car10: 's63', car11: 'sl63', car12: 'm4' };
 
