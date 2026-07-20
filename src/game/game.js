@@ -352,12 +352,12 @@ export class Game {
     });
 
     // 야간 헤드라이트 (차와 함께 이동하는 스포트라이트) — F키 상향등 시 증폭
-    const headlight = new THREE.SpotLight(0xffedc4, 1000, 85, 0.44, 0.5, 1.7);
+    const headlight = new THREE.SpotLight(0xffedc4, 600, 85, 0.44, 0.5, 1.7);
     headlight.position.set(0, 2.0, 1.5);
     headlight.target.position.set(0, -1.5, 32);
     this.car.group.add(headlight, headlight.target);
     this.headlight = headlight;
-    this.headlightBase = { intensity: 1000, distance: 85, angle: 0.44 };
+    this.headlightBase = { intensity: 600, distance: 85, angle: 0.44 };
 
     // AI 트래픽(같은 방향): 왕복 8차선의 우측 4차선(플레이어 반부)만 사용.
     // 좌측 4차선의 대향 차량은 buildEnvironment의 장식 인스턴스가 담당(물리 없음 —
