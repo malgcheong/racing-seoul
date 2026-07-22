@@ -117,8 +117,7 @@ async function setGenStep(label, from, to, detail = '') {
   $('#gen-progress').style.width = `${to}%`;
 }
 
-// seedOverride: "같은 맵 다시"(시드 재사용 — 고스트 대결)
-async function generateAndPlay(seedOverride = null) {
+async function generateAndPlay() {
   disposePreviews(); // 선택 화면 프리뷰 컨텍스트 정리
   showScreen('#screen-generating');
 
@@ -130,12 +129,9 @@ async function generateAndPlay(seedOverride = null) {
   await setGenStep('야경 배치 중…', 70, 100, '강 건너 도시에 불을 켜는 중');
   await new Promise((r) => setTimeout(r, 350));
 
-  // 시드 결정: "같은 맵 다시" 재사용 → 개발용 ?seed= 최초 진입 → 그 외엔 매번 새 도시
+  // 시드 결정: 개발용 ?seed= 는 최초 진입에만 적용 — '다시 달리기'는 매번 새 도시
   const q = new URLSearchParams(location.search);
-  let seed;
-  if (seedOverride) seed = seedOverride;
-  else if (!state.lastSeed && q.get('seed')) seed = q.get('seed');
-  else seed = String(Date.now());
+  const seed = !state.lastSeed && q.get('seed') ? q.get('seed') : String(Date.now());
   state.lastSeed = seed;
   // 시간대: 맵 선택 화면의 선택(노을/밤)을 따른다. ?tod=dusk|night 로 강제 가능
   const prng = createRng(seed + '::palette');
@@ -300,8 +296,8 @@ document.querySelectorAll('.map-card').forEach((el) => {
       .forEach((c) => c.classList.toggle('selected', c === el));
   });
 });
-$('#btn-restart').addEventListener('click', () => generateAndPlay()); // 새 시드 = 새로운 도시
-$('#btn-same').addEventListener('click', () => generateAndPlay(state.lastSeed)); // 시드 재사용
+// 다시 달리기 = 새 시드(새 도시) — 같은 맵 재도전은 개발용 ?seed= 로만 남긴다
+$('#btn-restart').addEventListener('click', () => generateAndPlay());
 $('#btn-menu').addEventListener('click', () => {
   state.game?.dispose();
   state.game = null;
