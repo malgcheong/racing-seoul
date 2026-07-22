@@ -297,7 +297,6 @@ body {
 .result-row { display: flex; justify-content: space-between; gap: 40px; }
 .result-row span { color: var(--muted); }
 .result-row strong { font-variant-numeric: tabular-nums; }
-.result-row strong.new-record { color: var(--accent); text-shadow: 0 0 14px rgba(255, 180, 84, .5); }
 .result-btns { display: flex; gap: 12px; }
 
 /* 봇 대결 순위표 (결과 화면, 라이브 갱신) */

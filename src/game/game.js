@@ -20,7 +20,6 @@ import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld, clampToRoad } from './physics.js';
 import { toonifyScene, InkEdgeShader } from './npr.js';
-import { GhostCar, loadGhost, saveGhost, GHOST_HZ } from './ghost.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds } from './sky.js';
@@ -456,17 +455,6 @@ export class Game {
       );
     }
 
-    // ── 고스트(베스트 기록): 정상 출발일 때만 — 개발용 중간 스타트(?at/?branch)나
-    // 자동주행(?autodrive)은 기록 대상이 아니다
-    this.seed = seed;
-    this.ghostEligible = branchParam === null && Number.isNaN(atParam)
-      && this.params.get('autodrive') !== '1';
-    if (this.ghostEligible) {
-      this.ghostBest = loadGhost(seed); // 이 시드의 베스트 레코드 (없으면 null)
-      this.ghostRec = { hz: GHOST_HZ, x: [], y: [], z: [], h: [] }; // 이번 판 녹화
-      if (this.ghostBest) this.ghost = new GhostCar(this.scene, this.ghostBest);
-    }
-
     // 개발용 렌더 통계 (?stats=1): 드로우콜/삼각형 수를 좌상단 힌트에 표시
     // 컴포저가 패스마다 info를 리셋하므로 수동 리셋으로 프레임 전체를 집계
     this.showStats = this.params.get('stats') === '1';
@@ -716,10 +704,6 @@ export class Game {
     this.running = true;
     this.clock.start();
     this.raceTime = 0;
-    // 고스트 대결 안내 — 지난 베스트가 함께 달린다
-    if (this.ghost) {
-      this.flash = { t: 3, label: '👻 고스트 대결', sub: `이 맵 베스트 ${this.ghostBest.time.toFixed(1)}초` };
-    }
     document.querySelector('.controls-hint')?.classList.remove('faded'); // 새 판마다 리셋
     sounds.engineStart(); // 엔진 루프(합성) — GO와 함께 시동
     this.loop();
@@ -778,8 +762,6 @@ export class Game {
       maxSpeed: this.maxSpeed,
       avgSpeed: this.raceTime > 0 ? (this.totalDist / this.raceTime) * 3.6 : 0,
       progress: this.currentSampleIdx / (this.samples.length - 1),
-      // 사고는 기록 저장 없음 — 기존 베스트만 알려줘 '같은 맵 다시' 재도전을 유도
-      ghost: this.ghostEligible ? { best: this.ghostBest?.time ?? null, newRecord: false } : null,
       standings: this.bots ? this.getStandings() : null, // 봇 대결 순위(라이브 갱신됨)
     };
     // 사고 슬로모(절제) — 잠깐 시간이 늘어지며 차가 미끄러지는 걸 보여주고
@@ -986,21 +968,10 @@ export class Game {
     this.finishTime = this.raceTime; // 순위표 기록
     sounds.engineStop();
     sounds.finish();
-    // 고스트 베스트 갱신: 이 시드 첫 완주거나 기존 베스트보다 빠르면 녹화를 저장
-    let ghost = null;
-    if (this.ghostRec) {
-      const prev = this.ghostBest?.time ?? null;
-      const newRecord = prev === null || this.raceTime < prev;
-      if (newRecord) {
-        saveGhost(this.seed, { time: this.raceTime, car: this.carModel, ...this.ghostRec });
-      }
-      ghost = { best: newRecord ? this.raceTime : prev, prevBest: prev, newRecord };
-    }
     this.ui.onFinish({
       totalTime: this.raceTime,
       maxSpeed: this.maxSpeed,
       avgSpeed: this.raceTime > 0 ? (this.totalDist / this.raceTime) * 3.6 : 0,
-      ghost,
       standings: this.bots ? this.getStandings() : null, // 봇 대결 순위(라이브 갱신됨)
     });
   }
@@ -1160,27 +1131,13 @@ export class Game {
       // 엔진음: 속도(가상 기어 피치)·스로틀·부스터 반영 (패드 트리거는 아날로그)
       sounds.engineUpdate(this.car.speedKmh, ctl.throttle, this.car.boostTimer > 0);
 
-      // 고스트: 이번 판 녹화(0.1s 고정 그리드 — 재생 시 인덱스=시각) + 베스트 재생
-      if (this.ghostRec) {
-        const rec = this.ghostRec;
-        while (rec.x.length <= this.raceTime * rec.hz) {
-          const bp = this.car.body.position;
-          rec.x.push(Math.round(bp.x * 100) / 100);
-          rec.y.push(Math.round(bp.y * 100) / 100);
-          rec.z.push(Math.round(bp.z * 100) / 100);
-          rec.h.push(Math.round(this.car.heading * 1000) / 1000);
-        }
-      }
-      this.ghost?.update(this.raceTime);
-
-      // 미니맵 갱신(~10Hz) — 봇(빨간 점) + 고스트(파란 점)
+      // 미니맵 갱신(~10Hz) — 봇(빨간 점)
       this._mmAcc = (this._mmAcc || 0) + dt;
       if (this.minimap && this._mmAcc >= 0.1) {
         this._mmAcc = 0;
         this.minimap.update(
           this.car.body.position, this.car.heading,
-          this.bots?.list.map((b) => b.car.group.position) ?? [],
-          this.ghost?.group.position || null);
+          this.bots?.list.map((b) => b.car.group.position) ?? []);
       }
 
       // 분기 사전 안내: 출구 500m/150m 전 1회씩 (분기 미진입 상태에서만, 폐쇄 시 없음)
@@ -1315,7 +1272,6 @@ export class Game {
     this.running = false;
     sounds.engineStop();
     this.minimap?.dispose();
-    this.ghost?.dispose();
     window.removeEventListener('keydown', this.keydown);
     window.removeEventListener('keyup', this.keyup);
     window.removeEventListener('resize', this.onResize);
