@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NIGHT DRIVE</title>
+  <!-- 인라인 파비콘 — favicon.ico 404(콘솔 에러) 방지 -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌉</text></svg>" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -25,6 +27,10 @@
         <label class="opt">
           <input type="checkbox" id="opt-traffic" checked />
           교통 차량
+        </label>
+        <label class="opt">
+          <input type="checkbox" id="opt-npr" />
+          만화 렌더 <span class="opt-sub">셀셰이딩 + 잉크 윤곽선</span>
         </label>
         <label class="opt">
           그래픽
@@ -161,7 +167,25 @@
       <div id="nearmiss" class="nearmiss hidden"></div>
     </div>
     <div id="countdown" class="countdown hidden"></div>
-    <div class="controls-hint">↑↓←→ / WASD 로 운전 · Shift 드리프트 · F 상향등 · C 시점 전환</div>
+    <div class="controls-hint">↑↓←→ / WASD 운전 · Shift 드리프트 · F 상향등 · C 시점 전환 · 🎮 게임패드 지원</div>
+    <!-- 터치 컨트롤: 터치 가능 기기에서만 표시 (game.bindTouch가 hidden 해제) -->
+    <div id="touch-controls" class="touch-controls hidden">
+      <div class="tc-steer">
+        <button id="tc-left" class="tc-btn" type="button">◀</button>
+        <button id="tc-right" class="tc-btn" type="button">▶</button>
+      </div>
+      <div class="tc-actions">
+        <div class="tc-row">
+          <button id="tc-cam" class="tc-btn tc-mini" type="button">시점</button>
+          <button id="tc-beam" class="tc-btn tc-mini" type="button">상향등</button>
+        </div>
+        <div class="tc-row">
+          <button id="tc-drift" class="tc-btn tc-drift" type="button">드리프트</button>
+          <button id="tc-brake" class="tc-btn tc-brake" type="button">▼</button>
+          <button id="tc-accel" class="tc-btn tc-accel" type="button">▲</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- 4. 결과 화면 -->
@@ -173,6 +197,9 @@
         <div class="result-row"><span>평균속도</span><strong id="result-score">-</strong></div>
         <div class="result-row"><span>총 기록</span><strong id="result-time">-</strong></div>
         <div class="result-row"><span>최고 속도</span><strong id="result-best">-</strong></div>
+        <!-- 이 맵(시드) 베스트 — 싱글 완주/사고 시에만 표시, 신기록이면 강조 -->
+        <div class="result-row hidden" id="result-ghost-row">
+          <span>👻 이 맵 베스트</span><strong id="result-ghost">-</strong></div>
       </div>
       <!-- 멀티 순위표: 완주 시각순 → 미완주(사고/주행중)는 진행률순. 라이브 갱신 -->
       <div id="result-ranks" class="result-ranks hidden"></div>

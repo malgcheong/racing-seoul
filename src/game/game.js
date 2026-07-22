@@ -20,6 +20,7 @@ import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld, clampToRoad } from './physics.js';
 import { toonifyScene, InkEdgeShader } from './npr.js';
+import { GhostCar, loadGhost, saveGhost, GHOST_HZ } from './ghost.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds } from './sky.js';
@@ -89,9 +90,16 @@ export class Game {
     this.autoQuality = qPick === 'auto';
     this.quality = QUALITY[this.autoQuality ? 'medium' : qPick];
 
+    // NPR(셀셰이딩): 시작화면 '만화 렌더' 토글 → opts.npr, URL ?npr=1|0 우선
+    this.npr = gq.get('npr') !== null ? gq.get('npr') === '1' : !!opts.npr;
+
     this.running = false;
     this.disposed = false;
+    // 입력 3계층: 키보드(이벤트) / 게임패드(매 프레임 폴링) / 터치(온스크린 버튼).
+    // 매 프레임 collectControls()가 하나의 아날로그 컨트롤로 합친다.
     this.input = { forward: false, backward: false, left: false, right: false, drift: false, highBeam: false };
+    this.pad = { steer: 0, throttle: 0, brake: 0, drift: false, high: false };
+    this.touch = { l: false, r: false, throttle: false, brake: false, drift: false, high: false };
     this.clock = new THREE.Clock();
 
     this.raceTime = 0;
@@ -191,10 +199,9 @@ export class Game {
     pmrem.dispose();
 
     // 포스트프로세싱: bloom(빛 번짐) + 비네트
-    // NPR 평가 모드(?npr=1): 씬을 전용 RT(색+뎁스)에 그리고 컴포저는 읽기만 —
+    // NPR 모드: 씬을 전용 RT(색+뎁스)에 그리고 컴포저는 읽기만 —
     // 컴포저 핑퐁 버퍼에 뎁스를 부착하면 뒤 패스가 그 버퍼에 그릴 때
     // "샘플 중 텍스처=렌더 대상" 피드백 루프로 화면이 깜빡인다(GL_INVALID_OPERATION)
-    this.npr = this.params.get('npr') === '1';
     this.composer = new EffectComposer(this.renderer);
     if (this.npr) {
       const ds = this.renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -439,13 +446,34 @@ export class Game {
       );
     }
 
+    // ── 고스트(베스트 기록): 싱글 + 정상 출발일 때만 — 개발용 중간 스타트(?at/?branch)나
+    // 자동주행(?autodrive)은 기록 대상이 아니고, 멀티는 상대가 이미 있다
+    this.seed = seed;
+    this.ghostEligible = !this.mpRoom && branchParam === null && Number.isNaN(atParam)
+      && this.params.get('autodrive') !== '1';
+    if (this.ghostEligible) {
+      this.ghostBest = loadGhost(seed); // 이 시드의 베스트 레코드 (없으면 null)
+      this.ghostRec = { hz: GHOST_HZ, x: [], y: [], z: [], h: [] }; // 이번 판 녹화
+      if (this.ghostBest) this.ghost = new GhostCar(this.scene, this.ghostBest);
+    }
+
     // 개발용 렌더 통계 (?stats=1): 드로우콜/삼각형 수를 좌상단 힌트에 표시
     // 컴포저가 패스마다 info를 리셋하므로 수동 리셋으로 프레임 전체를 집계
     this.showStats = this.params.get('stats') === '1';
     if (this.showStats) this.renderer.info.autoReset = false;
 
-    // NPR 평가: 씬이 전부 조립된 뒤 일괄 Toon 변환 (기본 모드에선 아무것도 안 함)
-    if (this.npr) toonifyScene(this.scene);
+    // NPR: 씬이 전부 조립된 뒤 일괄 Toon 변환 (기본 모드에선 아무것도 안 함).
+    // car/traffic이 변환 전에 수집해 둔 브레이크등 재질 참조는 변환 맵으로 재연결
+    // — 안 하면 NPR에서 브레이크 발광 연출만 죽는다(구 평가 모드의 알려진 한계였음)
+    if (this.npr) {
+      const conv = toonifyScene(this.scene);
+      this.car.tailMats = this.car.tailMats.map((m) => conv.get(m) || m);
+      if (this.traffic) {
+        for (const c of this.traffic.cars) {
+          if (c.tailMat) c.tailMat = conv.get(c.tailMat) || c.tailMat;
+        }
+      }
+    }
 
     this.bindInput();
     this.onResize = () => {
@@ -507,6 +535,94 @@ export class Game {
     this.keyup = (e) => this.onKey(e, false);
     window.addEventListener('keydown', this.keydown);
     window.addEventListener('keyup', this.keyup);
+    this.bindTouch();
+  }
+
+  // ── 터치 컨트롤: 터치 가능 기기에서만 온스크린 버튼 표시·바인딩 ──
+  bindTouch() {
+    this._touchBinds = [];
+    const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const tc = document.querySelector('#touch-controls');
+    if (!isTouch || !tc) return;
+    tc.classList.remove('hidden');
+    // HUD 속도계·부스터 게이지·미니맵을 버튼 위로 올리는 CSS 훅
+    document.body.classList.add('touch-mode');
+    const bind = (id, on, off) => {
+      const el = document.querySelector(id);
+      if (!el) return;
+      const down = (e) => { e.preventDefault(); on(); };
+      const up = (e) => { e.preventDefault(); off?.(); };
+      el.addEventListener('pointerdown', down);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+      el.addEventListener('pointerleave', up); // 누른 채 버튼 밖으로 미끄러진 손가락
+      this._touchBinds.push([el, down, up]);
+    };
+    const t = this.touch;
+    bind('#tc-left', () => { t.l = true; }, () => { t.l = false; });
+    bind('#tc-right', () => { t.r = true; }, () => { t.r = false; });
+    bind('#tc-accel', () => { t.throttle = true; }, () => { t.throttle = false; });
+    bind('#tc-brake', () => { t.brake = true; }, () => { t.brake = false; });
+    bind('#tc-drift', () => { t.drift = true; }, () => { t.drift = false; });
+    bind('#tc-beam', () => { t.high = true; }, () => { t.high = false; });
+    bind('#tc-cam', () => this.setView(!this.fpView), null); // 탭 = 시점 전환
+  }
+
+  unbindTouch() {
+    for (const [el, down, up] of this._touchBinds || []) {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      el.removeEventListener('pointerleave', up);
+    }
+    document.querySelector('#touch-controls')?.classList.add('hidden');
+    document.body.classList.remove('touch-mode');
+  }
+
+  // ── 게임패드: 이벤트가 없어 매 프레임 폴링 (표준 매핑) ──
+  // 좌스틱/십자 조향 · RT 가속 · LT 브레이크 · A 드리프트 · X 상향등 · Y 시점 전환
+  pollPad() {
+    const p = this.pad;
+    let gp = null;
+    if (navigator.getGamepads) {
+      for (const g of navigator.getGamepads()) {
+        if (g && g.connected) { gp = g; break; }
+      }
+    }
+    if (!gp) {
+      if (this.padActive) { // 연결 해제 순간 잔류 입력 제거
+        p.steer = p.throttle = p.brake = 0;
+        p.drift = p.high = false;
+        this.padActive = false;
+      }
+      return;
+    }
+    this.padActive = true;
+    const btn = (i) => gp.buttons[i] || { pressed: false, value: 0 };
+    const ax = gp.axes[0] || 0;
+    // 스틱 좌 = 음수 축 = 좌조향(+). 십자키는 디지털 폴백
+    p.steer = btn(14).pressed ? 1 : btn(15).pressed ? -1
+      : Math.abs(ax) < 0.12 ? 0 : -ax; // 데드존
+    p.throttle = Math.max(btn(7).value || 0, btn(12).pressed ? 1 : 0);
+    p.brake = Math.max(btn(6).value || 0, btn(13).pressed ? 1 : 0);
+    p.drift = btn(0).pressed;
+    p.high = btn(2).pressed;
+    const view = btn(3).pressed; // 엣지 검출(누르는 동안 연속 토글 방지)
+    if (view && !this._padView) this.setView(!this.fpView);
+    this._padView = view;
+  }
+
+  // 키보드·패드·터치를 하나의 아날로그 컨트롤로 합성 — car.update/연출의 단일 입력원
+  collectControls() {
+    const k = this.input, p = this.pad, t = this.touch;
+    const steer = (k.left ? 1 : 0) - (k.right ? 1 : 0) + p.steer + (t.l ? 1 : 0) - (t.r ? 1 : 0);
+    return {
+      steer: THREE.MathUtils.clamp(steer, -1, 1),
+      throttle: Math.max(k.forward ? 1 : 0, p.throttle, t.throttle ? 1 : 0),
+      brake: Math.max(k.backward ? 1 : 0, p.brake, t.brake ? 1 : 0),
+      drift: k.drift || p.drift || t.drift,
+      highBeam: k.highBeam || p.high || t.high,
+    };
   }
 
   // ── 멀티플레이: relay 이벤트 배선 ──
@@ -570,6 +686,7 @@ export class Game {
       let r = this.remotes.get(m._from);
       if (!r) {
         r = new RemoteCar(this.scene, this.world, m.c || 'car7', this.mpLightPool.pop() || null);
+        if (this.npr) toonifyScene(r.group); // 씬 일괄 변환 이후 합류 — 개별 변환
         this.remotes.set(m._from, r);
       }
       if (m.n) r.setName(m.n); // 이름표(최초 1회 생성)
@@ -767,7 +884,7 @@ export class Game {
         c: this.carModel,
         n: this.mpName,
         pr: Math.round((this.lastProgress || 0) * 1000) / 1000,
-        b: this.input.highBeam ? 1 : 0, // 상향등 — 상대 화면에서 광원 증폭
+        b: this.ctl?.highBeam ? 1 : 0, // 상향등 — 상대 화면에서 광원 증폭
       });
     }
     if (this.mpHost && this.traffic) {
@@ -802,6 +919,10 @@ export class Game {
     this.running = true;
     this.clock.start();
     this.raceTime = 0;
+    // 고스트 대결 안내 — 지난 베스트가 함께 달린다
+    if (this.ghost) {
+      this.flash = { t: 3, label: '👻 고스트 대결', sub: `이 맵 베스트 ${this.ghostBest.time.toFixed(1)}초` };
+    }
     document.querySelector('.controls-hint')?.classList.remove('faded'); // 새 판마다 리셋
     sounds.engineStart(); // 엔진 루프(합성) — GO와 함께 시동
     this.loop();
@@ -863,6 +984,8 @@ export class Game {
       maxSpeed: this.maxSpeed,
       avgSpeed: this.raceTime > 0 ? (this.totalDist / this.raceTime) * 3.6 : 0,
       progress: this.currentSampleIdx / (this.samples.length - 1),
+      // 사고는 기록 저장 없음 — 기존 베스트만 알려줘 '같은 맵 다시' 재도전을 유도
+      ghost: this.ghostEligible ? { best: this.ghostBest?.time ?? null, newRecord: false } : null,
     };
     if (this.net) {
       // 멀티: 슬로모 없이 즉시 — 내 물리만 느려지면 상대 화면과 어긋난다
@@ -964,7 +1087,7 @@ export class Game {
   updateCockpit(dt) {
     const c = this.cockpit;
     if (!c || !this.fpView) return;
-    const steer = (this.input.left ? 1 : 0) - (this.input.right ? 1 : 0);
+    const steer = this.ctl?.steer ?? 0; // 합성 컨트롤(패드 아날로그 반영)
     // 좌조향 = 운전자 시점 반시계 = +Z 축 기준 시계(-) 회전 (x=칼럼 기울기는 고정)
     if (c.wheelSpin) c.wheelSpin.rotation.z = THREE.MathUtils.lerp(
       c.wheelSpin.rotation.z, -steer * 1.5, Math.min(1, 10 * dt));
@@ -1046,8 +1169,8 @@ export class Game {
         this.particles.emit(rear.clone().add(jitter), vel, color, 0.4 + Math.random() * 0.25);
       }
     }
-    const steering = this.input.left || this.input.right;
-    if (this.input.drift && steering && Math.abs(car.speed) > 18) {
+    const ctl = this.ctl;
+    if (ctl?.drift && Math.abs(ctl.steer) > 0.25 && Math.abs(car.speed) > 18) {
       for (let i = 0; i < 2; i++) {
         const side = i === 0 ? 1 : -1;
         const left = new THREE.Vector3(-back.z, 0, back.x);
@@ -1076,10 +1199,21 @@ export class Game {
     sounds.engineStop();
     sounds.finish();
     this.net?.send({ t: 'fin', time: this.raceTime }); // 멀티: 완주 통지
+    // 고스트 베스트 갱신: 이 시드 첫 완주거나 기존 베스트보다 빠르면 녹화를 저장
+    let ghost = null;
+    if (this.ghostRec) {
+      const prev = this.ghostBest?.time ?? null;
+      const newRecord = prev === null || this.raceTime < prev;
+      if (newRecord) {
+        saveGhost(this.seed, { time: this.raceTime, car: this.carModel, ...this.ghostRec });
+      }
+      ghost = { best: newRecord ? this.raceTime : prev, prevBest: prev, newRecord };
+    }
     this.ui.onFinish({
       totalTime: this.raceTime,
       maxSpeed: this.maxSpeed,
       avgSpeed: this.raceTime > 0 ? (this.totalDist / this.raceTime) * 3.6 : 0,
+      ghost,
     });
   }
 
@@ -1099,6 +1233,8 @@ export class Game {
       }
     }
 
+    this.pollPad(); // 게임패드는 이벤트가 없다 — 매 프레임 상태 폴링
+
     if (this.running) {
       this.raceTime += dt;
       if (this.autoSteer) {
@@ -1117,10 +1253,11 @@ export class Game {
         this.input.right = diff < -0.05;
       }
       // ── 물리: 힘 적용(플레이어+대향차) → 스텝 → 클램프/동기화 ──
+      const ctl = this.ctl = this.collectControls(); // 키보드+패드+터치 합성
       const playerS = this.traffic ? this.traffic.arcAtIndex(this.currentSampleIdx) : 0;
-      this.car.update(dt, this.input);            // 플레이어 구동/조향 힘
+      this.car.update(dt, ctl);                    // 플레이어 구동/조향 힘
       // 상향등(F 홀드): 헤드라이트 증폭 + 앞차에 양보 요구
-      const hb = this.input.highBeam;
+      const hb = ctl.highBeam;
       this.headlight.intensity = this.headlightBase.intensity * (hb ? 2.4 : 1);
       this.headlight.distance = this.headlightBase.distance * (hb ? 1.5 : 1);
       this.headlight.angle = this.headlightBase.angle * (hb ? 1.12 : 1);
@@ -1229,16 +1366,30 @@ export class Game {
         if (this.flash.t <= 0) this.flash = null;
       }
 
-      // 엔진음: 속도(가상 기어 피치)·스로틀·부스터 반영
-      sounds.engineUpdate(this.car.speedKmh, this.input.forward ? 1 : 0, this.car.boostTimer > 0);
+      // 엔진음: 속도(가상 기어 피치)·스로틀·부스터 반영 (패드 트리거는 아날로그)
+      sounds.engineUpdate(this.car.speedKmh, ctl.throttle, this.car.boostTimer > 0);
 
-      // 미니맵 갱신(~10Hz)
+      // 고스트: 이번 판 녹화(0.1s 고정 그리드 — 재생 시 인덱스=시각) + 베스트 재생
+      if (this.ghostRec) {
+        const rec = this.ghostRec;
+        while (rec.x.length <= this.raceTime * rec.hz) {
+          const bp = this.car.body.position;
+          rec.x.push(Math.round(bp.x * 100) / 100);
+          rec.y.push(Math.round(bp.y * 100) / 100);
+          rec.z.push(Math.round(bp.z * 100) / 100);
+          rec.h.push(Math.round(this.car.heading * 1000) / 1000);
+        }
+      }
+      this.ghost?.update(this.raceTime);
+
+      // 미니맵 갱신(~10Hz) — 상대(멀티) + 고스트 점
       this._mmAcc = (this._mmAcc || 0) + dt;
       if (this.minimap && this._mmAcc >= 0.1) {
         this._mmAcc = 0;
         this.minimap.update(
           this.car.body.position, this.car.heading,
-          [...this.remotes.values()].map((r) => r.group.position));
+          [...this.remotes.values()].map((r) => r.group.position),
+          this.ghost?.group.position || null);
       }
 
       // 분기 사전 안내: 출구 500m/150m 전 1회씩 (분기 미진입 상태에서만, 폐쇄 시 없음)
@@ -1377,9 +1528,11 @@ export class Game {
     this.running = false;
     sounds.engineStop();
     this.minimap?.dispose();
+    this.ghost?.dispose();
     window.removeEventListener('keydown', this.keydown);
     window.removeEventListener('keyup', this.keyup);
     window.removeEventListener('resize', this.onResize);
+    this.unbindTouch();
     this.traffic?.dispose();
     if (!this.netHandoff) this.net?.close(); // 재대결: 소켓은 새 게임이 인계
     for (const r of this.remotes?.values() ?? []) r.dispose();

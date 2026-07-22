@@ -190,6 +190,17 @@ function configureResultButtons(isMulti) {
   b.textContent = '재대결';
 }
 
+// 이 맵 베스트(고스트) 표시 + '같은 맵 다시' 버튼을 고스트 대결로 안내
+function renderGhostInfo(ghost) {
+  const row = $('#result-ghost-row');
+  const el = $('#result-ghost');
+  const hasBest = ghost && ghost.best !== null && ghost.best !== undefined;
+  row.classList.toggle('hidden', !hasBest);
+  el.classList.toggle('new-record', !!ghost?.newRecord);
+  if (hasBest) el.textContent = formatTime(ghost.best) + (ghost.newRecord ? ' · 신기록!' : '');
+  $('#btn-same').textContent = hasBest ? '같은 맵 다시 · 👻 고스트 대결' : '같은 맵 다시';
+}
+
 function startGame(seed, palette, rematchInfo = null) {
   showScreen('#screen-game');
   $('#hud').classList.remove('hidden');
@@ -234,13 +245,14 @@ function startGame(seed, palette, rematchInfo = null) {
       }
     },
     onFinish(result) {
-      $('#result-title').textContent = '목적지 도착! 🏁';
+      $('#result-title').textContent = result.ghost?.newRecord ? '신기록 달성! 🏆' : '목적지 도착! 🏁';
       $('#result-progress').textContent = '100%';
       $('#result-time').textContent = formatTime(result.totalTime);
       $('#result-best').textContent = `${Math.round(result.maxSpeed)} km/h`;
       $('#result-score').textContent = `${result.avgSpeed.toFixed(1)} km/h`;
       const isMulti = !!state.game?.net;
       configureResultButtons(isMulti);
+      renderGhostInfo(result.ghost);
       if (isMulti) {
         renderStandings(state.game.getStandings());
         state.game.checkRematch(); // 상대가 먼저 재대결을 눌렀으면 카운터 표시
@@ -259,6 +271,7 @@ function startGame(seed, palette, rematchInfo = null) {
       $('#result-score').textContent = `${result.avgSpeed.toFixed(1)} km/h`;
       const isMulti = !!state.game?.net;
       configureResultButtons(isMulti);
+      renderGhostInfo(result.ghost);
       if (isMulti) {
         renderStandings(state.game.getStandings());
         state.game.checkRematch(); // 상대가 먼저 재대결을 눌렀으면 카운터 표시
@@ -292,16 +305,20 @@ function startGame(seed, palette, rematchInfo = null) {
     carModel: state.selectedCar,
     hardMode: $('#opt-hard').checked,
     traffic: $('#opt-traffic').checked,
+    npr: $('#opt-npr').checked, // 만화 렌더(셀셰이딩)
     quality: $('#opt-quality').value, // low|medium|high|auto
     rematch: rematchInfo,
   });
   state.game = game;
+  window.__game = game; // 개발·검증용 콘솔 훅 (자동 테스트가 내부 상태 점검에 사용)
   game.build(seed);
   game.start();
 }
 
 // ---------- 게임 설정 토글 (localStorage 유지) ----------
-for (const [id, key] of [['#opt-hard', 'nd_hard'], ['#opt-traffic', 'nd_traffic']]) {
+for (const [id, key] of [
+  ['#opt-hard', 'nd_hard'], ['#opt-traffic', 'nd_traffic'], ['#opt-npr', 'nd_npr'],
+]) {
   const el = $(id);
   const saved = localStorage.getItem(key);
   if (saved !== null) el.checked = saved === '1';
