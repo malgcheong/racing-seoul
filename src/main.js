@@ -179,17 +179,6 @@ function renderResultStandings(standings) {
   if (standings) renderStandings(standings);
 }
 
-// 이 맵 베스트(고스트) 표시 + '같은 맵 다시' 버튼을 고스트 대결로 안내
-function renderGhostInfo(ghost) {
-  const row = $('#result-ghost-row');
-  const el = $('#result-ghost');
-  const hasBest = ghost && ghost.best !== null && ghost.best !== undefined;
-  row.classList.toggle('hidden', !hasBest);
-  el.classList.toggle('new-record', !!ghost?.newRecord);
-  if (hasBest) el.textContent = formatTime(ghost.best) + (ghost.newRecord ? ' · 신기록!' : '');
-  $('#btn-same').textContent = hasBest ? '같은 맵 다시 · 👻 고스트 대결' : '같은 맵 다시';
-}
-
 function startGame(seed, palette) {
   showScreen('#screen-game');
   $('#hud').classList.remove('hidden');
@@ -234,12 +223,11 @@ function startGame(seed, palette) {
       }
     },
     onFinish(result) {
-      $('#result-title').textContent = result.ghost?.newRecord ? '신기록 달성! 🏆' : '목적지 도착! 🏁';
+      $('#result-title').textContent = '목적지 도착! 🏁';
       $('#result-progress').textContent = '100%';
       $('#result-time').textContent = formatTime(result.totalTime);
       $('#result-best').textContent = `${Math.round(result.maxSpeed)} km/h`;
       $('#result-score').textContent = `${result.avgSpeed.toFixed(1)} km/h`;
-      renderGhostInfo(result.ghost);
       renderResultStandings(result.standings);
       setTimeout(() => showScreen('#screen-result'), 1200);
     },
@@ -253,7 +241,6 @@ function startGame(seed, palette) {
       $('#result-time').textContent = formatTime(result.totalTime);
       $('#result-best').textContent = `${Math.round(result.maxSpeed)} km/h`;
       $('#result-score').textContent = `${result.avgSpeed.toFixed(1)} km/h`;
-      renderGhostInfo(result.ghost);
       renderResultStandings(result.standings);
       setTimeout(() => {
         cd.classList.add('hidden');

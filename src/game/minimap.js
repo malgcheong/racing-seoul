@@ -74,19 +74,11 @@ export class Minimap {
     this.ctx.drawImage(this.base, 0, 0);
   }
 
-  // playerPos: {x,z}, heading: 라디안, remotes: [{x,z}...], ghost: {x,z}|null (베스트 기록 재생)
-  update(playerPos, heading, remotes = [], ghost = null) {
+  // playerPos: {x,z}, heading: 라디안, remotes: 봇 등 상대 점 [{x,z}...]
+  update(playerPos, heading, remotes = []) {
     const c = this.ctx;
     c.clearRect(0, 0, this.w, this.h);
     c.drawImage(this.base, 0, 0);
-    // 고스트(옅은 파란 점) — 상대와 혼동되지 않게 색 분리
-    if (ghost) {
-      const [gx, gy] = this.tx(ghost.x, ghost.z);
-      c.fillStyle = 'rgba(130, 155, 255, 0.85)';
-      c.beginPath();
-      c.arc(gx, gy, 2.6, 0, Math.PI * 2);
-      c.fill();
-    }
     // 상대(빨간 점)
     c.fillStyle = '#ff7069';
     for (const p of remotes) {
