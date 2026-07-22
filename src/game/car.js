@@ -104,16 +104,21 @@ export class Car {
     this.boostTimer = Math.max(this.boostTimer, duration);
   }
 
+  // input: 아날로그 통합 컨트롤 {steer∈[-1,1](+=좌), throttle∈[0,1], brake∈[0,1],
+  // drift, highBeam} — 키보드 부울({forward,left,...})만 와도 동작(하위 호환)
   update(dt, input) {
     const b = this.body;
     const f = this.forward();
     const fx = f.x, fz = f.z; // _v1은 아래서 재사용되므로 성분을 미리 복사
     const fwd = b.velocity.x * fx + b.velocity.z * fz;
 
-    // 구동/제동
+    const throttle = input.throttle ?? (input.forward ? 1 : 0);
+    const brake = input.brake ?? (input.backward ? 1 : 0);
+
+    // 구동/제동 (패드 트리거는 아날로그 — 절반만 당기면 절반 출력)
     let drive = 0;
-    if (input.forward) drive = ENGINE;
-    else if (input.backward) drive = fwd > 0.5 ? -BRAKE : -REVERSE;
+    if (throttle > 0.02) drive = ENGINE * throttle;
+    else if (brake > 0.02) drive = (fwd > 0.5 ? -BRAKE : -REVERSE) * brake;
     const boosting = this.boostTimer > 0;
     if (boosting) { drive *= 1.6; this.boostTimer -= dt; }
     if (fwd > (boosting ? MAX_SPEED * 1.4 : MAX_SPEED) && drive > 0) drive = 0;
@@ -123,7 +128,7 @@ export class Car {
 
     // 조향: 속도 있을 때 요 회전속도를 목표치로 부드럽게.
     // 고속일수록 민감도를 낮춰(10m/s 초과분 비례 감쇠) 살짝만 눌러도 휙 도는 느낌 제거.
-    const steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+    const steer = input.steer ?? ((input.left ? 1 : 0) - (input.right ? 1 : 0));
     const speedFactor = Math.min(1, Math.abs(fwd) / 7);
     const highDamp = 1 / (1 + Math.max(0, Math.abs(fwd) - 10) * 0.03);
     const targetYaw = steer * MAX_YAW * speedFactor * highDamp * (fwd < -0.5 ? -1 : 1) * (input.drift ? 1.35 : 1);
@@ -142,8 +147,8 @@ export class Car {
     const cap = boosting ? 70 : 58;
     if (sp > cap) { b.velocity.x *= cap / sp; b.velocity.z *= cap / sp; }
 
-    // 후미등: 브레이크(↓/S)로 감속하거나, 스로틀 뗀 채 달려 감속 중일 때 밝게
-    const braking = (input.backward && fwd > 0.3) || (!input.forward && !boosting && fwd > 5);
+    // 후미등: 브레이크로 감속하거나, 스로틀 뗀 채 달려 감속 중일 때 밝게
+    const braking = (brake > 0.02 && fwd > 0.3) || (throttle < 0.02 && !boosting && fwd > 5);
     const ti = braking ? this.tailBase * 3.5 : this.tailBase;
     for (const m of this.tailMats) m.emissiveIntensity = ti;
 

@@ -1,7 +1,7 @@
-// NPR(셀셰이딩) 실험 모드 — ?npr=1 로만 켜지는 평가용 토글. 기본 룩(PBR)은 불변.
-// 레시피는 물멍/seaside-walk에서 검증한 것: ①MeshToonMaterial 변환(4단 gradientMap,
-// 최저 밴드를 올려 밤 장면의 어두운 면이 통검정으로 죽지 않게) ②화면공간 뎁스
-// 불연속 잉크 엣지(인버티드 헐은 그 프로젝트에서 폐기된 방식).
+// NPR(셀셰이딩) 렌더 모드 — 시작 화면 '만화 렌더' 토글(또는 ?npr=1/0)로 켠다.
+// 기본 룩(PBR)은 불변. 레시피는 물멍/seaside-walk에서 검증한 것:
+// ①MeshToonMaterial 변환(4단 gradientMap, 최저 밴드를 올려 밤 장면의 어두운 면이
+// 통검정으로 죽지 않게) ②화면공간 뎁스 불연속 잉크 엣지(인버티드 헐은 폐기된 방식).
 // 성능 관점: Toon은 env/PBR BRDF를 안 타서 멀티 다인원 시 셰이딩 비용이 줄어든다.
 
 import * as THREE from 'three';
@@ -21,8 +21,8 @@ function gradientMap() {
 // MeshStandardMaterial → MeshToonMaterial (공유 재질은 캐시로 1회만 변환).
 // 절차 셰이더 주입 재질(빌딩 창문·수면 등 onBeforeCompile 커스텀)은 건드리지
 // 않는다 — 변환하면 주입 GLSL이 날아가 창문·물결이 사라진다.
-// 주의(평가 모드 한계): car.js/traffic.js가 이미 수집해 둔 재질 참조(브레이크등
-// emissive 부스트)는 구 재질을 가리키게 되어 NPR에선 브레이크 발광 연출만 죽는다.
+// 반환값은 구재질→신재질 Map — car.js/traffic.js가 미리 수집해 둔 재질 참조
+// (브레이크등 emissive 부스트)를 호출측이 이 맵으로 재연결한다.
 export function toonifyScene(scene) {
   const cache = new Map();
   const convert = (m) => {
@@ -52,7 +52,7 @@ export function toonifyScene(scene) {
     if (Array.isArray(o.material)) o.material = o.material.map(convert);
     else o.material = convert(o.material);
   });
-  return cache.size;
+  return cache;
 }
 
 // 뎁스 불연속 잉크 엣지: 이웃 픽셀과의 뷰공간 깊이 차가 (거리 비례 임계보다)
