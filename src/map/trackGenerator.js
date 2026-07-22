@@ -18,25 +18,38 @@ export function generateTrack(rng) {
   const RIV_X1 = RIV_X0 + RIV_W;
   const zBridge = range(rng, -120, 120); // 다리가 놓이는 z (시드마다 다름)
 
+  // 컨트롤 포인트의 굽이(z 지터)는 급커브 방지 3장치를 거친다(사용자 결정 2026-07-21
+  // "가파른 커브 제거"): ①관성 — 직전 굽이의 절반을 이어받아 지그재그 대신 긴 S자
+  // ②굽이 폭 제한(스텝당 ±130) ③다리 인접 구간은 지터를 죽여 직선 교량과 각이 안 서게
   const points = [];
-  // 서쪽 도심: S자로 굽이치며 강으로 접근
-  let z = zBridge + range(rng, -60, 60);
+  let dz = 0;
+  const bend = (damp = 1) => {
+    dz = THREE.MathUtils.clamp(dz * 0.5 + range(rng, -95, 95) * damp, -110, 110);
+    return dz;
+  };
+  // 서쪽 도심: 완만한 S자로 굽이치다 강(다리)으로 수렴
+  let z = zBridge + range(rng, -50, 50);
   const westXs = [-700, -540, -380, -240, -60];
-  for (const x of westXs) {
-    z += range(rng, -170, 170);
+  const westPull = [0, 0.1, 0.25, 0.45, 0.7]; // 다리에 가까울수록 zBridge로 끌어당김
+  westXs.forEach((x, i) => {
+    z += bend();
+    z += (zBridge - z) * westPull[i];
     points.push(new THREE.Vector3(x, 0, z));
-  }
+  });
   // 다리 진입·통과·진출: z를 고정해 곧은 교량 구간을 만든다
   for (const x of [RIV_X0 - 150, RIV_X0 - 50, RIV_X1 + 50, RIV_X1 + 150]) {
     points.push(new THREE.Vector3(x, 0, zBridge));
   }
-  // 동쪽 도심: 다시 굽이치다 목적지
+  // 동쪽 도심(출발측): 다리 직후는 거의 직진, 멀어질수록 굽이가 살아난다.
+  // 첫 포인트는 교량 컨트롤(650)과 180m 띄운다 — 예전 10m 간격이 헤어핀의 주범
   z = zBridge;
-  const eastXs = [660, 820, 990, 1160, 1330];
-  for (const x of eastXs) {
-    z += range(rng, -170, 170);
+  dz = 0;
+  const eastXs = [830, 990, 1160, 1330];
+  const eastDamp = [0.4, 0.8, 1, 1];
+  eastXs.forEach((x, i) => {
+    z += bend(eastDamp[i]);
     points.push(new THREE.Vector3(x, 0, z));
-  }
+  });
 
   // 출발지↔도착지 반전: 동쪽 도심에서 출발해 다리를 건너
   // 여의도(랜드마크가 있는 서안) 방면 도심에 도착한다
@@ -52,23 +65,29 @@ export function generateTrack(rng) {
     samples.push({ pos, tangent: new THREE.Vector3(), left: new THREE.Vector3() });
   }
 
-  // 곡률 제한 스무딩: 커브 반경이 도로 반폭(16)에 근접하면 리본 안쪽 변이
-  // 자기 자신을 가로질러 접힌다("커브에서 도로가 깨짐"). 반경 < ~45m 구간을
-  // 이웃 중점으로 반복 완화 — 직선(다리 구간)은 중점이 같은 선상이라 안 움직인다.
-  const MIN_R = 45;
-  for (let pass = 0; pass < 4; pass++) {
-    for (let i = 1; i < SAMPLE_COUNT - 1; i++) {
-      const a = samples[i - 1].pos, b = samples[i].pos, c = samples[i + 1].pos;
-      const v1x = b.x - a.x, v1z = b.z - a.z;
-      const v2x = c.x - b.x, v2z = c.z - b.z;
-      const l1 = Math.hypot(v1x, v1z), l2 = Math.hypot(v2x, v2z);
-      if (l1 < 1e-4 || l2 < 1e-4) continue;
-      const cos = Math.min(1, Math.max(-1, (v1x * v2x + v1z * v2z) / (l1 * l2)));
-      const ang = Math.acos(cos);
-      // 회전각/구간길이 ≈ 곡률. 반경이 MIN_R보다 작으면 완화
-      if (ang > l1 / MIN_R) {
-        b.x += ((a.x + c.x) / 2 - b.x) * 0.55;
-        b.z += ((a.z + c.z) / 2 - b.z) * 0.55;
+  // 곡률 제한 스무딩: 반경 < MIN_R 구간을 이웃 중점으로 반복 완화 — 직선(다리
+  // 구간)은 중점이 같은 선상이라 안 움직인다. 원래는 도로 리본이 접히는 기하
+  // 한계(~45m)만 막았지만, 지금은 주행 쾌적 기준(고속 순항 가능한 완만함)으로 상향
+  // (사용자 결정 2026-07-21 "가파른 커브 제거") — 컨트롤 포인트 단계의 관성·수렴과
+  // 이중 안전망이다.
+  // 멀티그리드: 중점 이동은 확산이라 수십 샘플에 걸친 넓은 급커브엔 수렴이 매우
+  // 느리다 — 굵은 보폭(9샘플≈25m)으로 큰 굽이부터 펴고 점점 세밀하게 마무리.
+  const MIN_R = 190;
+  for (const K of [9, 3, 1]) {
+    for (let pass = 0; pass < 16; pass++) {
+      for (let i = K; i < SAMPLE_COUNT - K; i++) {
+        const a = samples[i - K].pos, b = samples[i].pos, c = samples[i + K].pos;
+        const v1x = b.x - a.x, v1z = b.z - a.z;
+        const v2x = c.x - b.x, v2z = c.z - b.z;
+        const l1 = Math.hypot(v1x, v1z), l2 = Math.hypot(v2x, v2z);
+        if (l1 < 1e-4 || l2 < 1e-4) continue;
+        const cos = Math.min(1, Math.max(-1, (v1x * v2x + v1z * v2z) / (l1 * l2)));
+        const ang = Math.acos(cos);
+        // 회전각/구간길이 ≈ 곡률. 반경이 MIN_R보다 작으면 완화
+        if (ang > l1 / MIN_R) {
+          b.x += ((a.x + c.x) / 2 - b.x) * 0.55;
+          b.z += ((a.z + c.z) / 2 - b.z) * 0.55;
+        }
       }
     }
   }
