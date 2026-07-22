@@ -1,5 +1,6 @@
-// 게임 본체: 씬 구성(트랙·분기·환경·차량), 주행 루프, 진행률/결과, 멀티플레이.
-// 하늘 연출은 sky.js, 사운드는 sounds.js, AI 트래픽은 traffic.js로 분리.
+// 게임 본체: 씬 구성(트랙·분기·환경·차량), 주행 루프, 진행률/결과, 봇 대결.
+// 하늘 연출은 sky.js, 사운드는 sounds.js, AI 트래픽은 traffic.js,
+// 봇 레이서는 bots.js로 분리.
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -11,8 +12,7 @@ import { generateTrack, buildRoadMesh, buildMedian, buildStartLine, MEDIAN_HALF 
 import { generateBranchRoute, buildBranchRoad } from '../map/branchRoad.js';
 import { buildRoadArrows } from '../map/roadArrows.js';
 import { TrafficSystem } from './traffic.js';
-import { NetClient } from '../net/client.js';
-import { RemoteCar } from './remoteCar.js';
+import { BotSystem } from './bots.js';
 import { Minimap } from './minimap.js';
 import { ParticleSystem } from './particles.js';
 import { buildEnvironment } from '../map/decorations.js';
@@ -32,13 +32,11 @@ const MAX_SPEED_ABS = 36;       // car.js MAX_SPEED와 동일 (속도감 연출 
 //  dpr(픽셀비율, 화면 픽셀 수가 제곱으로 늘어 최대 비용) / 그림자맵 해상도 + 갱신 주기
 //  (깊이 패스가 씬 전체 재렌더라 비쌈) / 트래픽 대수(실차 6~14k폴리).
 //  bloom·비네트는 반해상도라 저렴해 프리셋에서 제외(무드 유지).
-//  ※ traffic은 싱글에서만 프리셋 적용 — 멀티는 방장 스냅샷 인덱스 일치 위해 고정.
 const QUALITY = {
   low:    { dpr: 1.0,  shadow: 1024, shadowEvery: 3, traffic: 6 },
   medium: { dpr: 1.25, shadow: 2048, shadowEvery: 2, traffic: 10 },
   high:   { dpr: 1.6,  shadow: 4096, shadowEvery: 1, traffic: 16 },
 };
-const MP_TRAFFIC = 10; // 멀티 고정 트래픽 대수
 
 // 화면 가장자리를 살짝 어둡게 (비네트)
 const VignetteShader = {
@@ -71,7 +69,7 @@ export class Game {
   constructor(container, palette, ui, opts = {}) {
     this.container = container;
     this.palette = palette;
-    // ui 콜백: { onHud, onCountdown, onFinish, onFail, onStandings, onRematch, onRematchGo }
+    // ui 콜백: { onHud, onCountdown, onFinish, onFail, onStandings }
     this.ui = ui;
     this.carModel = opts.carModel || 'car7'; // 선택된 차량 에셋 이름
     // URL 파라미터 스냅샷 — 게임 생성 시점 기준으로 한 번만 파싱해 전역에서 재사용
@@ -93,6 +91,12 @@ export class Game {
     // NPR(셀셰이딩): 시작화면 '만화 렌더' 토글 → opts.npr, URL ?npr=1|0 우선
     this.npr = gq.get('npr') !== null ? gq.get('npr') === '1' : !!opts.npr;
 
+    // 봇 대결: 시작화면 select → opts.bots, URL ?bots=0..3 우선
+    const botsParam = parseInt(gq.get('bots'), 10);
+    this.botCount = Number.isFinite(botsParam)
+      ? Math.max(0, Math.min(3, botsParam))
+      : Math.max(0, Math.min(3, opts.bots ?? 3));
+
     this.running = false;
     this.disposed = false;
     // 입력 3계층: 키보드(이벤트) / 게임패드(매 프레임 폴링) / 터치(온스크린 버튼).
@@ -106,7 +110,6 @@ export class Game {
     this.totalDist = 0;   // 주행 거리(전진분) — 평균속도 산출용
     this.maxSpeed = 0;    // 최고 속도(km/h) — 결과 화면용
     this.finished = false;
-    this.rematch = opts.rematch || null; // { net, ids, host } — 직전 판 소켓 인계
   }
 
   build(seed) {
@@ -372,50 +375,57 @@ export class Game {
     // AI 트래픽(같은 방향): 왕복 8차선의 우측 4차선(플레이어 반부)만 사용.
     // 좌측 4차선의 대향 차량은 buildEnvironment의 장식 인스턴스가 담당(물리 없음 —
     // 중앙분리대 클램프로 플레이어가 접촉할 수 없다).
-    // 멀티(?room=CODE[&host=1]): 서버는 중계만, 각 클라가 자기 물리 시뮬.
-    // 트래픽은 방장 클라가 시뮬해 중계 → 게스트는 퍼펫(재생) 모드
-    const mq = this.params;
-    this.mpRoom = mq.get('room');
-    this.mpHost = mq.get('host') === '1';
-    // 재대결: 기존 소켓·방을 그대로 물려받는다 (재접속하면 방장 승계가 연쇄로 꼬임).
-    // host는 URL이 아니라 승계까지 반영된 직전 게임의 최종 상태를 따른다
-    if (this.rematch) {
-      this.mpHost = !!this.rematch.host;
-      this.mpIds = this.rematch.ids || [];
-    }
-    this.mpName = (mq.get('name') || '').slice(0, 8) || (this.mpHost ? '방장' : '상대');
-    this.mpPeers = this.rematch ? Math.max(0, (this.rematch.ids || []).length - 1) : 0;
-    this.mpStartAt = 0;
-    this.remotes = new Map(); // peerId -> RemoteCar
-
     const laneW = track.width / 8; // 차선폭 4m
+    const laneCenters = [laneW * 0.5, laneW * 1.5, laneW * 2.5, laneW * 3.5]; // +2,+6,+10,+14
     this.traffic = !this.trafficOn ? null : new TrafficSystem(this.scene, this.samples, {
       world: this.world,
-      laneCenters: [laneW * 0.5, laneW * 1.5, laneW * 2.5, laneW * 3.5], // +2,+6,+10,+14
-      // 실차 트래픽(6~14k폴리/대)은 무겁다 — 품질 프리셋으로 대수 관리(싱글).
-      // 멀티는 방장 스냅샷 배열 인덱스가 양쪽 일치해야 하므로 고정값.
-      count: this.mpRoom ? MP_TRAFFIC : this.quality.traffic,
+      laneCenters,
+      // 실차 트래픽(6~14k폴리/대)은 무겁다 — 품질 프리셋으로 대수 관리
+      count: this.quality.traffic,
       river: track.river, // 다리 구간 정체(구간별 밀도감)용
       debugClose: this.params.get('tclose') === '1',
-      puppet: !!this.mpRoom && !this.mpHost, // 게스트: 방장 스냅샷 재생
     });
-    // 멀티: 원격 헤드라이트 슬롯 프리워밍 — 레이스 중 광원 수가 늘면
-    // 모든 재질 셰이더가 재컴파일되며 크게 버벅인다(60fps 튜닝의 핵심)
-    this.mpLightPool = [];
-    if (this.mpRoom) {
-      for (let i = 0; i < 3; i++) {
-        const L = new THREE.SpotLight(0xffedc4, 0, 70, 0.4, 0.5, 1.7);
-        this.scene.add(L, L.target);
-        this.mpLightPool.push(L);
-      }
+
+    // ── 봇 레이서: 플레이어와 같은 규칙(트래픽 충돌=리타이어)으로 결승까지 경쟁 ──
+    // 출발 그리드: 2열(차로 중앙 ±2.6m) × N행(8m 간격) — 봇이 앞줄, 플레이어는 맨 뒤
+    this.bots = null;
+    if (this.botCount > 0) {
+      const botRng = createRng(seed + '::bots');
+      this.bots = new BotSystem(this.scene, this.world, this.samples, {
+        count: this.botCount,
+        // 봇은 플레이어가 안 고른 차종을 쓴다 — 내 차와 헷갈리지 않게
+        models: ['car7', 'car10', 'car11', 'car12'].filter((m) => m !== this.carModel),
+        laneMin: this.laneMin,
+        laneMax: this.laneMax,
+        laneCenters,
+        segLen,
+        rng: botRng,
+        onEvent: (type, bot) => this.onBotEvent(type, bot),
+      });
+      const slotPos = (slot) => {
+        const row = Math.floor(slot / 2), col = slot % 2;
+        const gi = Math.max(2, this.startIdx - Math.round((row * 8) / segLen));
+        const gs = this.samples[gi];
+        return {
+          gi,
+          pos: gs.pos.clone().addScaledVector(gs.left, this.laneCenter + (col === 0 ? -2.6 : 2.6)),
+          heading: Math.atan2(gs.tangent.x, gs.tangent.z),
+        };
+      };
+      this.bots.list.forEach((bot, k) => {
+        const sp = slotPos(k);
+        this.bots.place(bot, sp.pos, sp.heading, sp.gi);
+      });
+      const mine = slotPos(this.botCount);
+      this.car.placeAt(mine.pos, mine.heading);
+      this._gridIdx = mine.gi; // 아래 currentSampleIdx 초기화가 이 값을 쓴다
     }
-    if (this.mpRoom) this.setupNet();
     this.crashShake = 0;
     // 니어미스 칼치기 → 부스터 게이지 충전(점수 없음)
     this.boostGauge = 0;   // 0~1, 차면 부스터 발동
     this.flash = null;     // 중앙 팝업 { t, label, sub?, close? }
 
-    this.currentSampleIdx = 0;
+    this.currentSampleIdx = this._gridIdx ?? 0;
     // 개발·검증: ?branch=1 → 분기 진출점 직전에서 시작 / ?branch=N(≥2) → 분기 샘플 N에서 시작
     const branchParam = this.params.get('branch');
     if (this.branch && branchParam === '1') {
@@ -446,10 +456,10 @@ export class Game {
       );
     }
 
-    // ── 고스트(베스트 기록): 싱글 + 정상 출발일 때만 — 개발용 중간 스타트(?at/?branch)나
-    // 자동주행(?autodrive)은 기록 대상이 아니고, 멀티는 상대가 이미 있다
+    // ── 고스트(베스트 기록): 정상 출발일 때만 — 개발용 중간 스타트(?at/?branch)나
+    // 자동주행(?autodrive)은 기록 대상이 아니다
     this.seed = seed;
-    this.ghostEligible = !this.mpRoom && branchParam === null && Number.isNaN(atParam)
+    this.ghostEligible = branchParam === null && Number.isNaN(atParam)
       && this.params.get('autodrive') !== '1';
     if (this.ghostEligible) {
       this.ghostBest = loadGhost(seed); // 이 시드의 베스트 레코드 (없으면 null)
@@ -468,6 +478,9 @@ export class Game {
     if (this.npr) {
       const conv = toonifyScene(this.scene);
       this.car.tailMats = this.car.tailMats.map((m) => conv.get(m) || m);
+      for (const b of this.bots?.list ?? []) {
+        b.car.tailMats = b.car.tailMats.map((m) => conv.get(m) || m);
+      }
       if (this.traffic) {
         for (const c of this.traffic.cars) {
           if (c.tailMat) c.tailMat = conv.get(c.tailMat) || c.tailMat;
@@ -625,114 +638,22 @@ export class Game {
     };
   }
 
-  // ── 멀티플레이: relay 이벤트 배선 ──
-  setupNet() {
-    // 재대결이면 직전 판의 소켓을 그대로 사용 — 방 나갔다 재입장하면
-    // 서버 방장 승계·고스트 피어 레이스가 생긴다. 핸들러만 새로 덮어쓴다.
-    if (this.rematch) {
-      this.net = this.rematch.net;
-    } else {
-      this.net = new NetClient(`ws://${location.hostname}:8787`);
-      this.net.join(this.mpRoom);
-    }
-    this.rmSet = new Set();  // 재대결 준비 완료한 피어 id
-    this.rmSelf = false;
-    this.net.on('peers', (m) => {
-      this.mpPeers = Math.max(0, m.n - 1);
-      this.mpIds = m.ids || []; // 방 로스터 — 출발 그리드 슬롯 결정용
-    });
-    this.net.on('left', (m) => {
-      const r = this.remotes.get(m.id);
-      if (r) {
-        r.dispose();
-        if (r.head) this.mpLightPool.push(r.head); // 광원 풀 반환
-        this.remotes.delete(m.id);
-      }
-      this._rrLeft?.(m.id);      // 재대결 대기 중 퇴장 — 기다릴 대상에서 제외
-      this.checkRematch();       // 남은 전원이 이미 준비 상태일 수 있다
-      this._standingsDirty = true;
-    });
-    // 방장 지정/승계: 서버가 첫 입장자를 방장으로, 방장 퇴장 시 다음 피어를 지정.
-    // 내가 새 방장이 되면 퍼펫 트래픽을 실제 AI 시뮬로 승격해 이어받는다
-    this.net.on('host', (m) => {
-      this.mpHostId = m.id;
-      if (m.id !== this.net.id && this.mpHost) {
-        // 서버 지정 방장이 따로 있음(내가 나중에 입장한 케이스) — 시뮬 주체 양보
-        this.mpHost = false;
-        this.traffic?.demote();
-      }
-      if (m.id === this.net.id && !this.mpHost) {
-        this.mpHost = true;
-        this.traffic?.promote();
-        this.flash = { t: 3, label: '방장 승계', sub: '트래픽 시뮬을 이어받았습니다' };
-        // 레이스 시작 전에 방장이 나간 경우 — 새 방장이 시작 신호를 대신 쏜다
-        if (!this.mpStartAt && this._goResolve) {
-          this.mpStartAt = this.net.serverNow() + 4000;
-          const q = this.params;
-          this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
-          this._goResolve();
-        }
-      }
-    });
-    this.net.on('go', (m) => {
-      this.mpStartAt = m.at;
-      if (m.seed && String(m.seed) !== String(this.params.get('seed'))) {
-        console.warn('[mp] 시드 불일치 — 호스트가 준 링크(?seed=..&room=..)로 접속해야 같은 맵');
-      }
-      this._goResolve?.();
-    });
-    this.net.on('s', (m) => {
-      if (this.disposed) return; // 재대결 리빌드 중 구 게임 핸들러 잔류 방어
-      let r = this.remotes.get(m._from);
-      if (!r) {
-        r = new RemoteCar(this.scene, this.world, m.c || 'car7', this.mpLightPool.pop() || null);
-        if (this.npr) toonifyScene(r.group); // 씬 일괄 변환 이후 합류 — 개별 변환
-        this.remotes.set(m._from, r);
-      }
-      if (m.n) r.setName(m.n); // 이름표(최초 1회 생성)
-      r.progress = m.pr || 0;  // 순위 계산용
-      r.highBeam = !!m.b;      // 상향등 상태 → 원격 헤드라이트 증폭
-      r.push({ x: m.p[0], y: m.p[1], z: m.p[2], h: m.h, v: m.v });
-      if (this.finished) this._standingsDirty = true; // 결과 화면 순위표 라이브 갱신
-    });
-    this.net.on('tf', (m) => { if (!this.mpHost && this.traffic) this.traffic.applyNet(m.cars); });
-    this.net.on('fin', (m) => {
-      const r = this.remotes.get(m._from);
-      if (r) { r.progress = 1.001; r.finished = true; r.finishTime = m.time; } // 완주자는 항상 상위
-      const who = r?.name || '상대';
-      this.flash = { t: 3.5, label: `${who} 완주!`, sub: `기록 ${m.time.toFixed(1)}초` };
-      this._standingsDirty = true;
-    });
-    // 사고 리타이어 통지 — 순위표에 "사고 (진행률%)"로 남는다
-    this.net.on('crash', (m) => {
-      const r = this.remotes.get(m._from);
-      if (r) { r.crashed = true; r.progress = m.pr ?? r.progress; }
-      this.flash = { t: 3, label: `${r?.name || '상대'} 사고!`, sub: '리타이어' };
-      this._standingsDirty = true;
-    });
-    // 재대결 준비 신호(결과 화면에서 재대결 버튼 클릭) — 전원 모이면 같은 방·시드로 재시작
-    this.net.on('rm', (m) => {
-      this.rmSet.add(m._from);
-      this.checkRematch();
-    });
-  }
-
-  // ── 순위표: 완주자(기록순) → 미완주자(진행률순). 나+원격 전원 포함 ──
+  // ── 순위표: 완주자(기록순) → 미완주자(사고/주행중, 진행률순). 나+봇 전원 ──
   getStandings() {
     const rows = [{
       me: true,
-      name: this.mpName,
+      name: '나',
       time: this.finishTime ?? null,
       crashed: !!this.failed,
       progress: this.lastProgress || 0,
     }];
-    for (const r of this.remotes.values()) {
+    for (const b of this.bots?.list ?? []) {
       rows.push({
         me: false,
-        name: r.name || '상대',
-        time: r.finishTime ?? null,
-        crashed: !!r.crashed,
-        progress: Math.min(r.progress || 0, 1),
+        name: `🤖 ${b.name}`,
+        time: b.finishTime,
+        crashed: b.crashed,
+        progress: Math.min(b.progress || 0, 1),
       });
     }
     rows.sort((a, b) => {
@@ -744,156 +665,33 @@ export class Game {
     return rows;
   }
 
-  // ── 재대결: 결과 화면에서 전원이 준비되면 소켓을 인계해 같은 방·시드로 재시작 ──
-  requestRematch() {
-    if (!this.net || this.rmSelf) return;
-    this.rmSelf = true;
-    this.net.send({ t: 'rm' });
-    this.checkRematch();
-  }
-
-  checkRematch() {
-    if (!this.net || !this.finished || this.netHandoff) return;
-    const roster = [...this.remotes.keys()];
-    const ready = this.rmSet
-      ? roster.filter((id) => this.rmSet.has(id)).length + (this.rmSelf ? 1 : 0)
-      : 0;
-    this.ui.onRematch?.({ ready, total: roster.length + 1 });
-    if (this.rmSelf && roster.every((id) => this.rmSet.has(id))) {
-      this.netHandoff = true; // dispose가 소켓을 닫지 않게 — 새 게임이 물려받는다
-      this.ui.onRematchGo?.({
-        net: this.net,
-        ids: [this.net.id, ...roster],
-        host: this.mpHost,
-      });
-    }
-  }
-
-  // 시작 동기화: 방장이 피어 입장을 기다렸다 서버시각 기준 GO 시점을 브로드캐스트.
-  // 양쪽 모두 (GO − 카운트다운 2400ms) 시점까지 대기 후 동시에 카운트다운 진입.
-  async mpAwaitStart() {
-    if (this.rematch) {
-      // ── 재대결 동기화: 각자 씬 리빌드 속도가 달라서, 준비된 클라가 'rr' 핑을
-      // 반복 송신 → 방장이 전원 확인 후 go. (리빌드 중 host 승계·go는 main.js가
-      // rematch 객체에 브릿지해 둔다 — 그 창에서 온 메시지는 구 게임 핸들러 몫이라)
-      this.mpHost = !!this.rematch.host;
-      if (this.rematch.goAt) this.mpStartAt = this.rematch.goAt;
-      this.ui.onCountdown('재대결 준비중…');
-      const need = new Set(this.mpIds.filter((id) => id !== this.net.id));
-      const got = new Set();
-      this.net.on('rr', (m) => got.add(m._from));
-      this._rrLeft = (id) => need.delete(id);
-      const ping = setInterval(() => { if (!this.mpStartAt) this.net.send({ t: 'rr' }); }, 400);
-      const t0 = performance.now();
-      const q = this.params;
-      if (this.mpHost && !this.mpStartAt) {
-        await new Promise((res) => {
-          const iv = setInterval(() => {
-            if (this.disposed || [...need].every((id) => got.has(id))
-              || performance.now() - t0 > 30000) { clearInterval(iv); res(); }
-          }, 120);
-        });
-        if (this.disposed) { clearInterval(ping); return; }
-        this.mpStartAt = this.net.serverNow() + 4000;
-        this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
-      } else if (!this.mpStartAt) {
-        await new Promise((res) => {
-          this._goResolve = res;
-          const iv = setInterval(() => {
-            if (this.disposed || this.mpStartAt) { clearInterval(iv); res(); }
-            // 방장이 리빌드 창에서 이탈한 극단 케이스 — 30초 후 스스로 출발 신호
-            else if (performance.now() - t0 > 30000) {
-              clearInterval(iv);
-              this.mpStartAt = this.net.serverNow() + 4000;
-              this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
-              res();
-            }
-          }, 120);
-        });
-      }
-      clearInterval(ping);
-      if (this.disposed) return;
-    } else if (this.mpHost) {
-      this.ui.onCountdown(`상대 대기중… 방 코드 ${this.mpRoom}`);
-      // 게스트가 로비에서 방을 발견→차량 선택→로딩까지 걸리는 시간 감안(90초 후 솔로 출발)
-      const t0 = performance.now();
-      await new Promise((res) => {
-        const iv = setInterval(() => {
-          if (this.mpPeers > 0 || performance.now() - t0 > 90000) { clearInterval(iv); res(); }
-        }, 150);
-      });
-      this.mpStartAt = this.net.serverNow() + 4000;
-      const q = this.params;
-      this.net.send({ t: 'go', at: this.mpStartAt, seed: q.get('seed'), tod: q.get('tod') });
+  // 봇 완주/사고 통지(bots.js 콜백) — 중앙 팝업 + 순위표 갱신
+  onBotEvent(type, bot) {
+    if (type === 'finish') {
+      this.flash = { t: 3.5, label: `🤖 ${bot.name} 완주!`, sub: `기록 ${bot.finishTime.toFixed(1)}초` };
     } else {
-      this.ui.onCountdown('호스트 대기중…');
-      if (!this.mpStartAt) await new Promise((res) => { this._goResolve = res; });
+      this.flash = { t: 3, label: `🤖 ${bot.name} 사고!`, sub: '리타이어' };
     }
-    // 출발 그리드: 로스터를 정렬해 슬롯을 결정적으로 분배 — 전원이 같은 지점에
-    // 겹쳐 스폰되지 않게 2열(좌/우 차로) × N행(8m 간격) 배치
-    const ids = [...new Set([this.net.id, ...(this.mpIds || [])])].sort();
-    const slot = Math.max(0, ids.indexOf(this.net.id));
-    const col = slot % 2;
-    const row = Math.floor(slot / 2);
-    const gi = Math.max(2, this.startIdx - Math.round((row * 8) / this.segLen));
-    const gs = this.samples[gi];
-    const lat = this.laneCenter + (col === 0 ? -2.6 : 2.6);
-    this.car.placeAt(
-      gs.pos.clone().addScaledVector(gs.left, lat),
-      Math.atan2(gs.tangent.x, gs.tangent.z));
-    this.currentSampleIdx = gi;
-    // 배치 직후 스냅샷 1회 선송신 — GO 순간부터 상대 차가 그리드에 보인다
-    const p0 = this.car.body.position;
-    this.net.send({
-      t: 's', p: [p0.x, p0.y, p0.z], h: this.car.heading, v: 0,
-      c: this.carModel, n: this.mpName, pr: 0,
-    });
-
-    const beginAt = this.mpStartAt - 2400;
-    await new Promise((res) => {
-      const iv = setInterval(() => {
-        if (this.net.serverNow() >= beginAt) { clearInterval(iv); res(); }
-      }, 25);
-    });
+    this._standingsDirty = true;
   }
 
-  // 멀티 프레임 틱: 원격 차 보간 + 스냅샷 송신(~15Hz) + (방장) 트래픽 중계(~10Hz)
-  mpTick(dt) {
-    for (const r of this.remotes.values()) {
-      r.update();
-      // 원격 차에도 도로 경계 클램프 — 분리대는 물리 벽이 아니라 수학 클램프라
-      // 스프링 오버슈트/보간이 분리대 메시를 뚫고 보이는 현상을 여기서 막는다.
-      // (우측 한계는 진출차로 확장 가능성 때문에 느슨하게 30)
-      const nr = this.nearestSampleOf(
-        this.samples, r._idx ?? this.currentSampleIdx, 200, r.body.position);
-      r._idx = nr.idx;
-      if (nr.dist < 40) {
-        clampToRoad(r.body, this.samples[nr.idx], this.laneMin, 30);
-        r.group.position.set(r.body.position.x, r.body.position.y, r.body.position.z);
+  // 봇의 회피 판단에 넘길 장애물 목록: 트래픽 + 플레이어(종료 후에도 도로 위 장애물)
+  collectObstacles() {
+    const list = [];
+    if (this.traffic) {
+      for (const c of this.traffic.cars) {
+        if (c.active) list.push({ s: c.s, lat: c.lane, speed: c.effSpeed });
       }
     }
-    this._mpAccS = (this._mpAccS || 0) + dt;
-    if (this._mpAccS >= 1 / 15) {
-      this._mpAccS = 0;
-      const p = this.car.body.position;
-      this.net.send({
-        t: 's',
-        p: [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100],
-        h: Math.round(this.car.heading * 1000) / 1000,
-        v: Math.round(this.car.speed * 10) / 10,
-        c: this.carModel,
-        n: this.mpName,
-        pr: Math.round((this.lastProgress || 0) * 1000) / 1000,
-        b: this.ctl?.highBeam ? 1 : 0, // 상향등 — 상대 화면에서 광원 증폭
-      });
-    }
-    if (this.mpHost && this.traffic) {
-      this._mpAccT = (this._mpAccT || 0) + dt;
-      if (this._mpAccT >= 1 / 10) {
-        this._mpAccT = 0;
-        this.net.send({ t: 'tf', cars: this.traffic.getNet() });
-      }
-    }
+    const ps = this.samples[this.currentSampleIdx];
+    const px = this.car.body.position.x - ps.pos.x;
+    const pz = this.car.body.position.z - ps.pos.z;
+    list.push({
+      s: this.bots.arcAtIndex(this.currentSampleIdx) + px * ps.tangent.x + pz * ps.tangent.z,
+      lat: px * ps.left.x + pz * ps.left.z,
+      speed: Math.max(0, this.car.speed),
+    });
+    return list;
   }
 
   async countdown() {
@@ -908,7 +706,6 @@ export class Game {
   }
 
   async start() {
-    if (this.mpRoom) await this.mpAwaitStart();
     await this.countdown();
     if (this.disposed) return;
     // 개발·검증용 자동 주행 (?autodrive=1)
@@ -974,11 +771,8 @@ export class Game {
     if (this.finished) return;
     this.finished = true;
     this.failed = true; // 순위표: 사고 리타이어 표시용
-    this.mpEnded = true; // 멀티: 방장이면 관전 트래픽 시뮬로 전환
     this.crashShake = 1.4; // 사고 임팩트 셰이크(감쇠는 updateCamera가 처리)
     sounds.engineStop();
-    // 멀티: 사고 통지 — 상대 순위표에 "사고 (진행률%)"로 기록된다
-    this.net?.send({ t: 'crash', pr: Math.round((this.lastProgress || 0) * 1000) / 1000 });
     const result = {
       totalTime: this.raceTime,
       maxSpeed: this.maxSpeed,
@@ -986,17 +780,12 @@ export class Game {
       progress: this.currentSampleIdx / (this.samples.length - 1),
       // 사고는 기록 저장 없음 — 기존 베스트만 알려줘 '같은 맵 다시' 재도전을 유도
       ghost: this.ghostEligible ? { best: this.ghostBest?.time ?? null, newRecord: false } : null,
+      standings: this.bots ? this.getStandings() : null, // 봇 대결 순위(라이브 갱신됨)
     };
-    if (this.net) {
-      // 멀티: 슬로모 없이 즉시 — 내 물리만 느려지면 상대 화면과 어긋난다
-      this.running = false;
-      this.ui.onFail(result);
-    } else {
-      // 싱글: 사고 슬로모(절제) — 잠깐 시간이 늘어지며 차가 미끄러지는 걸 보여주고
-      // 결과 흐름으로. 오버레이·시점 전환 없음(화면 가리는 연출 비선호)
-      this.slowmo = 1.15;
-      this._failUi = () => this.ui.onFail(result);
-    }
+    // 사고 슬로모(절제) — 잠깐 시간이 늘어지며 차가 미끄러지는 걸 보여주고
+    // 결과 흐름으로. 오버레이·시점 전환 없음(화면 가리는 연출 비선호)
+    this.slowmo = 1.15;
+    this._failUi = () => this.ui.onFail(result);
   }
 
   // 니어미스: 아슬아슬할수록 부스터 게이지를 많이 충전 (점수는 없음 — 순위는 평균속도)
@@ -1194,11 +983,9 @@ export class Game {
 
   finish() {
     this.running = false;
-    this.mpEnded = true; // 멀티: 방장이면 관전 트래픽 시뮬로 전환
     this.finishTime = this.raceTime; // 순위표 기록
     sounds.engineStop();
     sounds.finish();
-    this.net?.send({ t: 'fin', time: this.raceTime }); // 멀티: 완주 통지
     // 고스트 베스트 갱신: 이 시드 첫 완주거나 기존 베스트보다 빠르면 녹화를 저장
     let ghost = null;
     if (this.ghostRec) {
@@ -1214,6 +1001,7 @@ export class Game {
       maxSpeed: this.maxSpeed,
       avgSpeed: this.raceTime > 0 ? (this.totalDist / this.raceTime) * 3.6 : 0,
       ghost,
+      standings: this.bots ? this.getStandings() : null, // 봇 대결 순위(라이브 갱신됨)
     });
   }
 
@@ -1262,12 +1050,15 @@ export class Game {
       this.headlight.distance = this.headlightBase.distance * (hb ? 1.5 : 1);
       this.headlight.angle = this.headlightBase.angle * (hb ? 1.12 : 1);
       if (this.traffic) {
-        // 플레이어의 차선 내 횡위치·속도 — 트래픽이 플레이어를 앞차로 취급
+        // 플레이어의 차선 내 횡위치·속도 — 트래픽이 플레이어를 앞차로 취급.
+        // 봇 위치도 넘겨 트래픽이 봇을 들이받거나 옆구리로 파고들지 않게 한다
         const psmp = this.samples[this.currentSampleIdx];
         const plat = (this.car.body.position.x - psmp.pos.x) * psmp.left.x
           + (this.car.body.position.z - psmp.pos.z) * psmp.left.z;
-        this.traffic.control(dt, playerS, plat, this.car.speed, hb);
+        this.traffic.control(dt, playerS, plat, this.car.speed, hb,
+          this.bots?.racerInfo() ?? []);
       }
+      if (this.bots) this.bots.control(dt, this.collectObstacles(), this.raceTime); // 봇 구동/조향 힘
       this.world.step(1 / 60, dt, 3);             // 강체 적분(충돌 해결)
 
       // 플레이어: 도로 폭 안으로 클램프(중앙 넘기 가능, 가장자리만 배리어) + 동기화.
@@ -1354,7 +1145,7 @@ export class Game {
       }
       this.car.sync();
       if (this.traffic) this.traffic.postStep(this.laneMax);
-      if (this.net) this.mpTick(dt); // 멀티: 원격 차 보간 + 스냅샷 송수신
+      if (this.bots) this.bots.postStep(); // 봇 도로 클램프 + 메시 동기화
 
       // 니어미스 칼치기: 아슬아슬하게 스치면 부스터 게이지 충전
       if (this.traffic) {
@@ -1382,13 +1173,13 @@ export class Game {
       }
       this.ghost?.update(this.raceTime);
 
-      // 미니맵 갱신(~10Hz) — 상대(멀티) + 고스트 점
+      // 미니맵 갱신(~10Hz) — 봇(빨간 점) + 고스트(파란 점)
       this._mmAcc = (this._mmAcc || 0) + dt;
       if (this.minimap && this._mmAcc >= 0.1) {
         this._mmAcc = 0;
         this.minimap.update(
           this.car.body.position, this.car.heading,
-          [...this.remotes.values()].map((r) => r.group.position),
+          this.bots?.list.map((b) => b.car.group.position) ?? [],
           this.ghost?.group.position || null);
       }
 
@@ -1425,15 +1216,15 @@ export class Game {
             this.branch.exitIdx / nAll, 1,
             this.branchIdx / (this.branch.samples.length - 30))
         : this.currentSampleIdx / nAll;
-      this.lastProgress = hudProgress; // 멀티: 스냅샷·순위 계산용
-      // 멀티: 실시간 순위 — 원격 피어들의 진행률(스냅샷 pr)과 비교
+      this.lastProgress = hudProgress; // 순위 계산용
+      // 실시간 순위 — 봇들의 진행률과 비교(완주 봇은 항상 위)
       let rank = null, racers = null;
-      if (this.net && this.remotes.size > 0) {
+      if (this.bots && this.bots.list.length > 0) {
         rank = 1;
-        for (const r of this.remotes.values()) {
-          if ((r.progress || 0) > hudProgress) rank++;
+        for (const b of this.bots.list) {
+          if ((b.finished ? 1.001 : b.progress || 0) > hudProgress) rank++;
         }
-        racers = this.remotes.size + 1;
+        racers = this.bots.list.length + 1;
       }
       this.ui.onHud({
         speed: this.car.speedKmh,
@@ -1445,27 +1236,23 @@ export class Game {
         flash: this.flash,
         rank, racers,
       });
-    } else if (this.net && this.mpHost && this.mpEnded && this.traffic && this.remotes.size > 0) {
-      // 방장 관전 모드: 내 레이스가 끝나도(사고·완주) 트래픽 시뮬·중계는 계속 —
-      // 멈추면 게스트 화면의 차들이 전부 얼어붙는다. 기준점(스폰 앵커)은 선두 게스트
-      let lead = null;
-      for (const r of this.remotes.values()) {
-        if (!lead || (r.progress || 0) > (lead.progress || 0)) lead = r;
+    } else if (this.finished && this.bots?.anyRacing()) {
+      // 관전 시뮬: 내 레이스가 끝나도(사고·완주) 봇들은 결승까지 달린다 —
+      // 결과 화면 순위표가 실시간으로 갱신된다. 트래픽 스폰 앵커는 선두 봇
+      this.raceTime += dt; // 봇 완주 기록용 레이스 시계는 계속 흐른다
+      if (this.traffic) {
+        const anchorS = this.traffic.arcAtIndex(this.bots.leadIdx());
+        this.traffic.control(dt, anchorS, 0, 20, false, this.bots.racerInfo());
       }
-      if (lead) {
-        const res = this.nearestSampleOf(
-          this.samples, this._specIdx ?? this.currentSampleIdx, 240, lead.group.position);
-        this._specIdx = res.idx;
-        const anchorS = this.traffic.arcAtIndex(res.idx);
-        this.traffic.control(dt, anchorS, 0, 20, false);
-        this.world.step(1 / 60, dt, 3);
-        this.traffic.postStep(this.laneMax);
-        this.mpTick(dt); // 원격 차 보간 + 트래픽 중계 지속
-      }
+      this.bots.control(dt, this.collectObstacles(), this.raceTime);
+      this.world.step(1 / 60, dt, 3);
+      if (this.traffic) this.traffic.postStep(this.laneMax);
+      this.bots.postStep();
+      this._standingsDirty = true; // 진행률 변동 — 0.5s 주기로 순위표 재렌더
     }
 
-    // 결과 화면 순위표 라이브 갱신 — 내가 끝나도 상대 기록(fin/crash/진행률)은 계속 들어온다
-    if (this.finished && this.net && this._standingsDirty) {
+    // 결과 화면 순위표 라이브 갱신 — 내가 끝나도 봇 기록(완주/사고/진행률)은 계속 변한다
+    if (this.finished && this.bots && this._standingsDirty) {
       this._stAcc = (this._stAcc || 0) + dt;
       if (this._stAcc >= 0.5) {
         this._stAcc = 0;
@@ -1534,8 +1321,7 @@ export class Game {
     window.removeEventListener('resize', this.onResize);
     this.unbindTouch();
     this.traffic?.dispose();
-    if (!this.netHandoff) this.net?.close(); // 재대결: 소켓은 새 게임이 인계
-    for (const r of this.remotes?.values() ?? []) r.dispose();
+    this.bots?.dispose();
     this.cockpit?.rt.dispose();
     this.composer?.dispose();
     this.renderer?.dispose();

@@ -67,45 +67,7 @@ body {
 }
 .opt-select:focus { border-color: var(--accent); }
 
-/* 멀티플레이 로비 */
 .start-btns { display: flex; gap: 12px; justify-content: center; }
-.start-btns.hidden { display: none; }
-.mp-head { display: flex; justify-content: space-between; align-items: center; }
-.mp-head-title { color: var(--muted); font-size: 13px; letter-spacing: 0.1em; }
-.mp-head-pad { width: 58px; } /* 타이틀 가운데 정렬용 균형추 */
-.mp-wrap {
-  margin-top: 22px; padding: 16px 18px; border-radius: 14px;
-  background: rgba(20, 26, 46, 0.55); border: 1px solid #2a3354;
-  display: inline-flex; flex-direction: column; gap: 10px; min-width: 380px;
-}
-.mp-wrap.hidden { display: none; }
-.mp-row { display: flex; gap: 8px; justify-content: center; }
-.mp-input {
-  flex: 1; min-width: 0; padding: 9px 12px; border-radius: 10px;
-  background: rgba(10, 14, 26, 0.8); border: 1px solid #2a3354;
-  color: #e8ecf8; font-size: 14px; outline: none;
-}
-.mp-input:focus { border-color: var(--accent); }
-.mp-list-head {
-  display: flex; justify-content: space-between; align-items: center;
-  color: var(--muted); font-size: 12px; letter-spacing: 0.06em; margin-top: 4px;
-}
-.mp-refresh {
-  background: none; border: 1px solid #2a3354; border-radius: 8px;
-  color: var(--muted); font-size: 11px; padding: 4px 10px; cursor: pointer;
-}
-.mp-refresh:hover { border-color: var(--accent); color: #e8ecf8; }
-.mp-rooms { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
-.mp-empty { color: var(--muted); font-size: 12px; padding: 10px 0; opacity: 0.75; }
-.mp-room {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px; border-radius: 10px; cursor: pointer;
-  background: rgba(10, 14, 26, 0.7); border: 1px solid #2a3354;
-  color: #e8ecf8; font-size: 14px;
-}
-.mp-room:hover { border-color: var(--accent); background: rgba(26, 34, 60, 0.8); }
-.mp-room-code { font-weight: 700; letter-spacing: 0.14em; }
-.mp-room-n { color: var(--muted); font-size: 12px; }
 
 .btn {
   border: 0; border-radius: 10px; padding: 10px 18px; font-size: 15px;
@@ -338,7 +300,7 @@ body {
 .result-row strong.new-record { color: var(--accent); text-shadow: 0 0 14px rgba(255, 180, 84, .5); }
 .result-btns { display: flex; gap: 12px; }
 
-/* 멀티 순위표 (결과 화면, 라이브 갱신) */
+/* 봇 대결 순위표 (결과 화면, 라이브 갱신) */
 .result-ranks {
   background: var(--panel); border-radius: 16px; padding: 14px 20px;
   min-width: 320px; display: flex; flex-direction: column; gap: 6px;

@@ -15,8 +15,7 @@
       <h1 class="logo">NIGHT DRIVE</h1>
       <p class="tagline">강 건너 야경을 끼고 달리는 고가도로 나이트 드라이브.</p>
       <div class="start-btns">
-        <button id="btn-start" class="btn btn-primary btn-big" type="button">싱글플레이</button>
-        <button id="btn-multi" class="btn btn-secondary btn-big" type="button">멀티플레이</button>
+        <button id="btn-start" class="btn btn-primary btn-big" type="button">주행 시작</button>
       </div>
       <!-- 게임 설정 (localStorage에 저장) -->
       <div class="opt-row">
@@ -33,6 +32,15 @@
           만화 렌더 <span class="opt-sub">셀셰이딩 + 잉크 윤곽선</span>
         </label>
         <label class="opt">
+          봇 대결
+          <select id="opt-bots" class="opt-select">
+            <option value="3">3대</option>
+            <option value="2">2대</option>
+            <option value="1">1대</option>
+            <option value="0">없음</option>
+          </select>
+        </label>
+        <label class="opt">
           그래픽
           <select id="opt-quality" class="opt-select">
             <option value="auto">자동</option>
@@ -41,24 +49,6 @@
             <option value="high">높음</option>
           </select>
         </label>
-      </div>
-      <!-- 멀티플레이 로비: 방 코드 = 맵 시드 (같은 코드 = 같은 맵) -->
-      <div id="mp-panel" class="mp-wrap hidden">
-        <div class="mp-head">
-          <button id="btn-mp-back" class="mp-refresh" type="button">← 뒤로</button>
-          <span class="mp-head-title">멀티플레이</span>
-          <span class="mp-head-pad"></span>
-        </div>
-        <div class="mp-row">
-          <input id="mp-name" class="mp-input" maxlength="8" placeholder="닉네임" autocomplete="off" />
-          <button id="btn-mp-quick" class="btn btn-primary" type="button">빠른 모드</button>
-          <button id="btn-mp-create" class="btn btn-secondary" type="button">방 만들기</button>
-        </div>
-        <div class="mp-list-head">
-          <span>대기 중인 방</span>
-          <button id="btn-mp-refresh" class="mp-refresh" type="button">새로고침</button>
-        </div>
-        <div id="mp-rooms" class="mp-rooms"><div class="mp-empty">불러오는 중…</div></div>
       </div>
       <div class="credits">
         <div class="credits-title">3D 에셋 (Sketchfab, CC BY 4.0)</div>
@@ -201,10 +191,9 @@
         <div class="result-row hidden" id="result-ghost-row">
           <span>👻 이 맵 베스트</span><strong id="result-ghost">-</strong></div>
       </div>
-      <!-- 멀티 순위표: 완주 시각순 → 미완주(사고/주행중)는 진행률순. 라이브 갱신 -->
+      <!-- 봇 대결 순위표: 완주 시각순 → 미완주(사고/주행중)는 진행률순. 라이브 갱신 -->
       <div id="result-ranks" class="result-ranks hidden"></div>
       <div class="result-btns">
-        <button id="btn-rematch" class="btn btn-primary hidden" type="button">재대결</button>
         <button id="btn-same" class="btn btn-primary" type="button">같은 맵 다시</button>
         <button id="btn-restart" class="btn btn-secondary" type="button">새로운 도시로 다시</button>
         <button id="btn-menu" class="btn btn-ghost" type="button">메뉴로</button>
