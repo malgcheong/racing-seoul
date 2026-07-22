@@ -868,21 +868,47 @@ export class Game {
       this._clusterT = 0;
       c.drawCluster(this.car.speedKmh);
     }
-    // 후방 미러: 격프레임으로 후방 카메라를 렌더타깃에 그린다.
-    // 콕핏 자신이 거울에 비치면 안 되므로 렌더 동안만 숨긴다.
-    this._mirrorFlip = !this._mirrorFlip;
-    if (this._mirrorFlip) {
-      const h = this.car.heading;
-      const fx = Math.sin(h), fz = Math.cos(h);
-      const p = this.car.group.position;
-      c.rearCam.position.set(p.x - fx * 0.5, p.y + 1.55, p.z - fz * 0.5);
-      c.rearCam.lookAt(p.x - fx * 45, p.y + 0.8, p.z - fz * 45);
-      c.group.visible = false;
-      this.renderer.setRenderTarget(c.rt);
-      this.renderer.render(this.scene, c.rearCam);
-      this.renderer.setRenderTarget(null);
-      c.group.visible = true;
+    // 후방 미러들: 프레임당 1장만 갱신 — 룸미러는 짝수 프레임(30Hz),
+    // 사이드미러(좌/우)는 홀수 프레임을 나눠 쓴다. 콕핏 자신이 거울에 비치면
+    // 안 되므로 렌더 동안만 숨긴다.
+    if (!c.mirrors.length) return;
+    this._mirTick = (this._mirTick || 0) + 1;
+    let m;
+    if (this._mirTick % 2 === 0 || !c.sideMirrors.length) {
+      m = c.roomMirror || c.sideMirrors[0];
+    } else {
+      m = c.sideMirrors[(this._mirTick >> 1) % c.sideMirrors.length];
     }
+    if (!m) return;
+    const h2 = this.car.heading;
+    const fx = Math.sin(h2), fz = Math.cos(h2);
+    const p = this.car.group.position;
+    if (m.side === 0) {
+      // 룸미러: 실내 높이에서 정후방 (자기 차체는 숨긴 채 — 실내 지오메트리에 가로막힘)
+      m.cam.position.set(p.x - fx * 0.5, p.y + 1.55, p.z - fz * 0.5);
+      m.cam.lookAt(p.x - fx * 45, p.y + 0.8, p.z - fz * 45);
+    } else {
+      // 사이드미러: 거울 유리 위치(차 로컬)에서 후방 45m + 바깥쪽 1.5m를 겨냥 —
+      // 자기 차 옆면이 거울 안쪽 가장자리에 걸린다(하우징은 near 0.5가 걸러줌)
+      const lx = Math.cos(h2), lz = -Math.sin(h2); // 차 로컬 +X(왼쪽)의 월드 방향
+      const mp = m.pos;
+      m.cam.position.set(
+        p.x + lx * mp.x + fx * mp.z,
+        p.y + mp.y,
+        p.z + lz * mp.x + fz * mp.z);
+      m.cam.lookAt(
+        m.cam.position.x - fx * 45 + lx * m.side * 1.5,
+        m.cam.position.y - 0.7,
+        m.cam.position.z - fz * 45 + lz * m.side * 1.5);
+    }
+    c.group.visible = false;
+    // 1인칭에선 차체 모델이 꺼져 있지만 사이드미러엔 내 차 옆면이 보여야 한다
+    if (m.side !== 0) this.car.model.visible = true;
+    this.renderer.setRenderTarget(m.rt);
+    this.renderer.render(this.scene, m.cam);
+    this.renderer.setRenderTarget(null);
+    if (m.side !== 0) this.car.model.visible = !this.fpView;
+    c.group.visible = true;
   }
 
   // 풀링된 실광원을 차에서 가장 가까운 가로등 3개에 배치.
@@ -1278,7 +1304,7 @@ export class Game {
     this.unbindTouch();
     this.traffic?.dispose();
     this.bots?.dispose();
-    this.cockpit?.rt.dispose();
+    for (const m of this.cockpit?.mirrors ?? []) m.rt.dispose();
     this.composer?.dispose();
     this.renderer?.dispose();
     this.renderer?.domElement?.remove();

@@ -4,6 +4,8 @@
 // 계기판·내비는 런타임 캔버스(918은 순정 발광 계기판 사용), 거울은 후방 렌더타깃:
 //   918 = 순정 거울 메시의 UV를 평면 투영으로 재계산해 RT를 거울 모양에 정확히 맞춤.
 //   sf  = 하우징 면에 맞춘 오버레이 평면.
+// 거울은 위치(차 로컬 x)로 룸/좌측/우측을 분류해 각자 카메라·렌더타깃을 갖는다
+// — 예전엔 후방 카메라 1대를 전부 공유해 사이드미러와 룸미러가 같은 화면이었다.
 // 좌표계: 차 전방 = 로컬 +Z, 로컬 +X = 차의 왼쪽(주의!). 운전석 X=+0.45.
 // 1인칭 카메라는 반환값 eye 로컬 오프셋 — game.js FP 카메라가 이를 사용한다.
 
@@ -79,19 +81,13 @@ export function buildCockpit(carModel = 'car7') {
   const WHEEL_TILT = V.tilt; // 칼럼 각도(플랫화 베이크의 역각)
   const eye = V.eye;
 
-  // ── 미러 렌더타깃: 후방 카메라 1대를 거울들이 공유 ──
-  const rt = new THREE.WebGLRenderTarget(MIRROR_W, MIRROR_H);
-  rt.texture.wrapS = THREE.RepeatWrapping;
-  rt.texture.repeat.x = -1; // 거울 좌우 반전
-  const rearCam = new THREE.PerspectiveCamera(60, MIRROR_W / MIRROR_H, 0.5, 900);
-  const mirrorMat = new THREE.MeshBasicMaterial({ map: rt.texture });
-
   // ── GLB 셸 ──
+  const mirrorSlots = []; // 거울 유리 재질 슬롯 {mesh, idx|-1} — 분류는 로드 후 위치로
   const model = instantiate(V.asset);
   model.traverse((o) => {
     if (!o.isMesh) return;
     o.castShadow = false;
-    const apply = (m) => {
+    const apply = (m, idx) => {
       if (!m?.name) return m;
       // XJ220 셸(Ck*): 야간에도 톤이 살게 자기색 발광.
       // 루프/패널 법선이 바깥(위)을 향해 실내에서 뚫려 보인다 → 양면 렌더
@@ -102,12 +98,11 @@ export function buildCockpit(carModel = 'car7') {
         m.side = THREE.DoubleSide;
         m.userData.ckGlow = true; // 캐시 원본 공유 — 중복 적용 방지
       }
-      // 거울 유리(두 변형 공통, sf는 유리면을 GLB에서 분리해둠) →
-      // UV 재계산 후 렌더타깃 — 거울 모양에 딱 맞는 반사
-      // (우측 사이드미러는 만들었다가 사용자 합의로 제거 — 좌측+룸미러만)
+      // 거울 유리(변형 공통, sf는 유리면을 GLB에서 분리해둠): UV 재계산만 하고
+      // 재질 배정은 뒤로 미룬다 — 룸/좌/우 분류에 메시 최종 위치가 필요해서
       if (m.name === 'Mirror' || m.name.startsWith('Mirror.')) {
         remapMirrorUVs(o);
-        return mirrorMat;
+        mirrorSlots.push({ mesh: o, idx });
       }
       // 918: 유리(alpha 0.75로 어두움) → 거의 투명하게
       if (is918 && m.name.startsWith('Glass') && !m.userData.ckGlass) {
@@ -124,9 +119,43 @@ export function buildCockpit(carModel = 'car7') {
       }
       return m;
     };
-    o.material = Array.isArray(o.material) ? o.material.map(apply) : apply(o.material);
+    o.material = Array.isArray(o.material)
+      ? o.material.map((m, i) => apply(m, i))
+      : apply(o.material, -1);
   });
   group.add(model);
+
+  // ── 미러: 위치(차 로컬 x)로 룸(중앙)/좌(+)/우(-)를 분류해 각자 RT·카메라 부여 ──
+  // 실제 후방 카메라 배치·렌더는 game.updateCockpit이 프레임 분할로 수행한다
+  const mirrors = []; // { rt, cam, mat, side(0=룸, 1=좌, -1=우), pos(차 로컬 유리 중심) }
+  group.updateMatrixWorld(true); // 아직 씬 밖 — group 원점 기준 = 차 로컬
+  const mirrorOf = (side, pos) => {
+    let mir = mirrors.find((m) => m.side === side);
+    if (mir) return mir;
+    const rt = new THREE.WebGLRenderTarget(MIRROR_W, MIRROR_H);
+    rt.texture.wrapS = THREE.RepeatWrapping;
+    rt.texture.repeat.x = -1; // 거울 좌우 반전
+    mir = {
+      rt,
+      cam: new THREE.PerspectiveCamera(side === 0 ? 60 : 50, MIRROR_W / MIRROR_H, 0.5, 900),
+      mat: new THREE.MeshBasicMaterial({ map: rt.texture }),
+      side,
+      pos,
+    };
+    mirrors.push(mir);
+    return mir;
+  };
+  const _c = new THREE.Vector3();
+  for (const { mesh, idx } of mirrorSlots) {
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.boundingBox.getCenter(_c);
+    mesh.localToWorld(_c); // = 차 로컬 (+X 왼쪽, +Z 전방)
+    const side = _c.x > 0.55 ? 1 : _c.x < -0.55 ? -1 : 0;
+    const mir = mirrorOf(side, _c.clone());
+    if (idx >= 0) mesh.material[idx] = mir.mat;
+    else mesh.material = mir.mat;
+  }
+  mirrors.sort((a, b) => Math.abs(a.side) - Math.abs(b.side)); // 룸미러 먼저
 
   // 핸들: 로드 시 recenterPivot으로 허브 피벗 복원됨(assets.js).
   // 기울기(x)와 조향(z)을 오일러 XYZ 하나로 — X(기울기)·Z(스핀) 순서라 축이 맞는다.
@@ -197,5 +226,10 @@ export function buildCockpit(carModel = 'car7') {
     //  천장 = GLB의 CkCanopy 헤드라이너가 담당 — 런타임 오버레이 불필요)
   }
 
-  return { group, wheelSpin, rt, rearCam, drawCluster, eye };
+  return {
+    group, wheelSpin, drawCluster, eye,
+    mirrors,
+    roomMirror: mirrors.find((m) => m.side === 0) || null,
+    sideMirrors: mirrors.filter((m) => m.side !== 0),
+  };
 }
