@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 const FILES = {
   // 플레이어 차량 (전부 Sketchfab CC-BY — 크레딧 index.html)
@@ -68,9 +69,23 @@ function recenterPivot(node) {
   }
 }
 
+// 이름 접두 탐색: GLB 최적화(gltf-transform dedup)가 동일 지오메트리 메시를 합치며
+// 자식 메시명('Wheel_FL')이 사라지고 노드명 'Wheel_FL.001'(로더 새니타이즈 후
+// 'Wheel_FL001')만 남는다 — 정확 일치 대신 접두로 찾는다.
+export function findByNamePrefix(root, prefix) {
+  let found = null;
+  root.traverse((o) => {
+    if (!found && o.name.startsWith(prefix)) found = o;
+  });
+  return found;
+}
+
 export function loadGameAssets(onProgress) {
   if (!loadPromise) {
     const loader = new GLTFLoader();
+    // GLB는 gltf-transform meshopt 압축(62MB→8MB, 웹 배포 초기 로드 대책) —
+    // EXT_meshopt_compression 디코더 필수. 텍스처는 WebP(EXT_texture_webp).
+    loader.setMeshoptDecoder(MeshoptDecoder);
     const names = Object.keys(FILES);
     let done = 0;
     loadPromise = Promise.all(
@@ -81,13 +96,13 @@ export function loadGameAssets(onProgress) {
           import.meta.env.BASE_URL.replace(/\/$/, '') + FILES[name]);
         if (name.startsWith('car')) {
           for (const n of ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']) {
-            const wheel = gltf.scene.getObjectByName(n);
+            const wheel = findByNamePrefix(gltf.scene, n);
             if (wheel) recenterPivot(wheel);
           }
         }
         if (name.startsWith('cockpit')) {
           // 콕핏 핸들: 런타임에서 조향 회전하므로 허브 피벗 복원 필요
-          const w = gltf.scene.getObjectByName('WheelSpin');
+          const w = findByNamePrefix(gltf.scene, 'WheelSpin');
           if (w) recenterPivot(w);
         }
         cache[name] = gltf.scene;
