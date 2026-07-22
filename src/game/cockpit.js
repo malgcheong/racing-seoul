@@ -10,7 +10,7 @@
 // 1인칭 카메라는 반환값 eye 로컬 오프셋 — game.js FP 카메라가 이를 사용한다.
 
 import * as THREE from 'three';
-import { instantiate } from '../utils/assets.js';
+import { findByNamePrefix, instantiate } from '../utils/assets.js';
 
 const MIRROR_W = 256, MIRROR_H = 128;
 const DX = 0.45; // 운전석 좌측 오프셋
@@ -159,7 +159,7 @@ export function buildCockpit(carModel = 'car7') {
 
   // 핸들: 로드 시 recenterPivot으로 허브 피벗 복원됨(assets.js).
   // 기울기(x)와 조향(z)을 오일러 XYZ 하나로 — X(기울기)·Z(스핀) 순서라 축이 맞는다.
-  const wheelSpin = model.getObjectByName('WheelSpin');
+  const wheelSpin = findByNamePrefix(model, 'WheelSpin');
   if (wheelSpin) wheelSpin.rotation.set(WHEEL_TILT, 0, 0);
 
   // ── 계기판 캔버스: 순정 발광 계기판이 없는 변형(sf·엘란트라·코나)에만 ──

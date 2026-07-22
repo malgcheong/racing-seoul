@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { instantiate } from '../utils/assets.js';
+import { findByNamePrefix, instantiate } from '../utils/assets.js';
 import { makeCarBody } from './physics.js';
 
 // ── 튜닝 상수(브라우저에서 조작감 보고 조절) ──
@@ -26,7 +26,7 @@ export class Car {
     this.model = model;
     this.group.add(model);
     this.wheels = ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']
-      .map((n) => model.getObjectByName(n))
+      .map((n) => findByNamePrefix(model, n)) // 접두 탐색 — GLB 최적화 후 노드명 대응
       .filter(Boolean);
     this.body = makeCarBody(world, { w: 2.2, h: 1.0, l: 5.2, mass: MASS, pos: startPos });
     // 실사 PBR 모델(car7): metalness 1.0 재질은 어두운 야간 환경맵에서 새까맣게 죽는다
