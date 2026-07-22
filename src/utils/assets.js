@@ -75,7 +75,10 @@ export function loadGameAssets(onProgress) {
     let done = 0;
     loadPromise = Promise.all(
       names.map(async (name) => {
-        const gltf = await loader.loadAsync(FILES[name]);
+        // BASE_URL 접두: 서브 경로 배포(GitHub Pages 등)에서도 에셋 URL이 살아있게
+        // (FILES의 '/assets/..' 절대 경로를 배포 base 기준으로 변환)
+        const gltf = await loader.loadAsync(
+          import.meta.env.BASE_URL.replace(/\/$/, '') + FILES[name]);
         if (name.startsWith('car')) {
           for (const n of ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR']) {
             const wheel = gltf.scene.getObjectByName(n);
