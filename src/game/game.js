@@ -4,15 +4,12 @@
 
 import * as THREE from 'three';
 import { View } from './view.js';
-import { generateTrack, buildRoadMesh, buildMedian, buildStartLine, MEDIAN_HALF } from '../map/trackGenerator.js';
-import { generateBranchRoute, buildBranchRoad } from '../map/branchRoad.js';
-import { buildRoadArrows } from '../map/roadArrows.js';
+import { buildWorld } from '../map/buildWorld.js';
 import { TrafficSystem } from './traffic.js';
 import { BotSystem } from './bots.js';
 import { InputSystem } from './input.js';
 import { Minimap } from './minimap.js';
 import { ParticleSystem } from './particles.js';
-import { buildEnvironment } from '../map/decorations.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld } from './physics.js';
@@ -111,102 +108,35 @@ export class Game {
 
     this.particles = new ParticleSystem(this.scene);
 
-    // 트랙 + 장식 + 추억 오브젝트 (편도 루트: 출발 → 강 다리 → 목적지)
-    const track = generateTrack(rng);
-    this.samples = track.samples;
-    this.trackWidth = track.width;
-    this.river = track.river;
-    // 우측 통행: 주행 가능한 측면 범위(중앙분리대 ~ 우측 배리어).
-    // 왕복 8차선 — 플레이어·AI 트래픽은 우측 4차선, 좌측 4차선은 장식 대향 차량.
-    // 차 반폭(~1.1)+여유 — 1차로 중심(lat 2.0)에 정상적으로 올라탈 수 있어야 한다
-    this.laneMin = MEDIAN_HALF + 1.15;              // = 1.65, 분리대 연석에 안 닿는 한계
-    this.laneMax = track.width / 2 - 1.2;           // 우측 갓길 직전
-    this.laneCenter = (this.laneMin + this.laneMax) / 2;
-    const nS = track.samples.length;
-    // 샘플 간 평균 간격(m) — 구간 폭(미터)을 샘플 수로 환산하는 기준
-    let trackLen = 0;
-    for (let i = 0; i < nS - 1; i++) {
-      trackLen += track.samples[i].pos.distanceTo(track.samples[i + 1].pos);
-    }
-    const segLen = trackLen / (nS - 1);
-    // 출발선: 도로 시작 단면(끝단 정리 반경 70m)보다 안쪽 45m 지점 —
-    // 뒤따라오는 카메라(차 뒤 ~11m)가 도로 밖으로 빠져나가지 않게 여유를 둔다
-    this.startIdx = Math.max(8, Math.round(45 / segLen));
-    this.scene.add(buildStartLine(track.samples, track.width, this.startIdx));
-    this.scene.add(buildStartLine(track.samples, track.width, nS - 10)); // 결승선
-    const roadMesh = buildRoadMesh(track.samples, track.width);
-    // 노을: 물웅덩이(roughnessMap 매끈 패치)가 밝은 하늘을 그대로 비추면 과함
-    if (dusk) roadMesh.material.envMapIntensity = 0.35;
-    this.scene.add(roadMesh);
-    // 왕복 8차선: 중앙분리대(뉴저지 방호벽+LED)가 대향 차로와 주행 차로를 가른다
-    this.scene.add(buildMedian(track.samples));
-    this.segLen = segLen;
-
-    // 분기 루트: 다리 직후 우측 진출 램프. 노면·비주얼은 유지하되 사용자 결정으로
-    // '폐쇄'(2026-07-16) — 진입을 막고 본선 직진만 유일한 결승 경로로 둔다.
-    // (?branch=open 으로 개발 중 임시 개방 가능)
-    this.branch = generateBranchRoute(track.samples, track.river, track.width);
+    // 월드(도로·분기·화살표·도시 장식) 조립은 map/buildWorld.js — 주행 파라미터만 받는다
     const branchClosed = this.params.get('branch') !== 'open';
-    // 진출차로 판정용: 본선 가장자리 lat(이 선을 넘어야 분기 진입으로 본다)
-    const branchEdgeLat = track.width / 2 - 0.25;
+    const w = buildWorld(this.scene, rng, this.palette, { branchClosed });
+    this.samples = w.samples;
+    this.segLen = w.segLen;
+    this.startIdx = w.startIdx;
+    this.laneMin = w.laneMin;
+    this.laneMax = w.laneMax;
+    this.laneCenter = w.laneCenter;
+    this.branch = w.branch;
+    this.lampHeads = w.lampHeads;
+    this.envUpdate = w.envUpdate;  // 환경 애니메이션(전광판·점멸등) 훅
+    const segLen = w.segLen;
+    const laneCenters = w.laneCenters;
+
     // 분기 주행(진출 창·클램프·복귀·종점)은 branchDrive.js 상태기계가 담당
     this.branchDrive = new BranchDriver(this.branch, this.samples, {
       segLen,
       laneMin: this.laneMin,
       laneMax: this.laneMax,
-      edgeLat: branchEdgeLat,
+      edgeLat: w.branchEdgeLat,
       closed: branchClosed,
       onScrape: () => this.railScrape(),
     });
-    const gaps = [];
-    let branchCoarse = null;
-    let branchGroup = null;
-    if (this.branch) {
-      branchGroup = buildBranchRoad(this.branch, track.samples, track.width, track.river, branchClosed);
-      this.scene.add(branchGroup);
-      // 올림픽대로 종점 = 대체 결승선 — 합류 후엔 강변도로 남행 반부만 달리므로 그 폭으로
-      this.scene.add(buildStartLine(this.branch.samples, 7.2,
-        this.branch.samples.length - 30));
-      branchCoarse = this.branch.samples.filter((_, i) => i % 3 === 0).map((s) => s.pos);
-      // 진출부: 진출차로(테이퍼 시작)부터 램프가 파라펫 라인을 벗어나는 지점까지만
-      // 파라펫 개방 — 길게 열어두면 고어 뒤 데크 가장자리가 "벽 없는 낭떠러지"로 보인다
-      gaps.push({
-        side: 1, idx: this.branch.exitIdx - Math.round(41 / segLen),
-        halfSpan: Math.round(93 / segLen), parapetSpan: Math.round(69 / segLen),
-      });
-    }
-    // 발광 노면 화살표: 출발 직후·다리 서단 이후 주행 4개 차로 직진 유도 +
-    // 분기 진출차로(테이퍼 완료~고어)엔 우측 굽음 화살표 3개
-    {
-      const spots = [];
-      const laneLats = [0.5, 1.5, 2.5, 3.5].map((k) => (track.width / 8) * k);
-      const straightAt = [this.startIdx + Math.round(130 / segLen)];
-      for (let i = 0; i < nS; i++) {
-        if (track.samples[i].pos.x < track.river.x0 - 140) { straightAt.push(i); break; }
-      }
-      for (const ai of straightAt) {
-        if (ai < 4 || ai > nS - 30) continue;
-        for (const lat of laneLats) spots.push({ i: ai, lat, bend: 0 });
-      }
-      if (this.branch) {
-        const latX = branchEdgeLat + this.branch.laneW / 2 - 0.2;
-        for (const back of [60, 35, 12]) {
-          spots.push({ i: this.branch.exitIdx - Math.round(back / segLen), lat: latX, bend: 1 });
-        }
-      }
-      this.scene.add(buildRoadArrows(track.samples, spots));
-    }
-    // 코스 미니맵 (HUD 오버레이 — 본선·분기·강·플레이어/상대 점)
-    const hudEl = document.querySelector('#hud');
-    if (hudEl) this.minimap = new Minimap(hudEl, track.samples, this.branch, track.river);
 
-    const env = buildEnvironment(this.scene, rng, track.samples, this.palette, track.width,
-      gaps, track.river, branchCoarse);
-    // 분기 가로등 헤드도 실광원 풀에 합류 — 분기 주행 중에도 노면이 밝게 따라온다
-    this.lampHeads = branchGroup?.userData.lampHeads.length
-      ? env.lampHeads.concat(branchGroup.userData.lampHeads)
-      : env.lampHeads;
-    this.envUpdate = env.update;   // 환경 애니메이션(전광판·점멸등) 훅
+    // 코스 미니맵 (HUD 오버레이 — 본선·분기·강·플레이어/봇 점)
+    const hudEl = document.querySelector('#hud');
+    if (hudEl) this.minimap = new Minimap(hudEl, this.samples, this.branch, w.river);
+
     this.worldTime = 0;            // 레이스와 무관하게 항상 흐르는 시계
     // 실제 광원은 3개만 풀링: 매 프레임 차에서 가장 가까운 가로등 3개로 이동
     this.lampLights = [];
@@ -255,16 +185,14 @@ export class Game {
     this.headlightBase = { intensity: hlIntensity, distance: 85, angle: 0.44 };
 
     // AI 트래픽(같은 방향): 왕복 8차선의 우측 4차선(플레이어 반부)만 사용.
-    // 좌측 4차선의 대향 차량은 buildEnvironment의 장식 인스턴스가 담당(물리 없음 —
+    // 좌측 4차선의 대향 차량은 buildWorld의 장식 인스턴스가 담당(물리 없음 —
     // 중앙분리대 클램프로 플레이어가 접촉할 수 없다).
-    const laneW = track.width / 8; // 차선폭 4m
-    const laneCenters = [laneW * 0.5, laneW * 1.5, laneW * 2.5, laneW * 3.5]; // +2,+6,+10,+14
     this.traffic = !this.trafficOn ? null : new TrafficSystem(this.scene, this.samples, {
       world: this.world,
       laneCenters,
       // 실차 트래픽(6~14k폴리/대)은 무겁다 — 품질 프리셋으로 대수 관리
       count: this.quality.traffic,
-      river: track.river, // 다리 구간 정체(구간별 밀도감)용
+      river: w.river, // 다리 구간 정체(구간별 밀도감)용
       debugClose: this.params.get('tclose') === '1',
     });
 
@@ -312,7 +240,7 @@ export class Game {
     const branchParam = this.params.get('branch');
     if (this.branch && branchParam === '1') {
       const bi = Math.max(0, this.branch.exitIdx - Math.round(160 / segLen)); // 테이퍼 시작 전
-      const bsmp = track.samples[bi];
+      const bsmp = this.samples[bi];
       this.currentSampleIdx = bi;
       this.car.placeAt(
         bsmp.pos.clone().addScaledVector(bsmp.left, this.laneCenter),
@@ -328,8 +256,9 @@ export class Game {
     // 개발·검증: ?at=0.45 → 루트의 해당 지점에서 시작 (다리 등 특정 구간 확인용)
     const atParam = parseFloat(this.params.get('at'));
     if (!Number.isNaN(atParam)) {
+      const nS = this.samples.length;
       const ai = Math.max(0, Math.min(nS - 2, Math.floor(nS * atParam)));
-      const asmp = track.samples[ai];
+      const asmp = this.samples[ai];
       this.currentSampleIdx = ai;
       this.car.placeAt(
         asmp.pos.clone().addScaledVector(asmp.left, this.laneCenter),
