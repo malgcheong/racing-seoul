@@ -27,6 +27,30 @@ npm run dev        # http://localhost:5173
 - **만화 렌더(NPR)**: 시작 화면 토글 — 셀셰이딩(MeshToon) + 화면공간 잉크 윤곽선 (`?npr=1|0`으로 강제 가능)
 - **연출**: WebAudio 합성 엔진음·충돌음, 미니맵 + 분기 사전 안내, 사고 슬로모, 발광 노면 화살표
 
+## 코드 구조
+
+```
+src/
+  main.js             화면 흐름(시작→차량→맵→주행→결과) + HUD/결과 UI 바인딩
+  game/
+    game.js           오케스트레이션: 씬 조립, 레이스 상태(완주/사고/순위), 메인 루프
+    view.js           렌더러·포스트프로세싱(블룸/비네트)·NPR 파이프라인·자동 품질 강등
+    sceneEnv.js       조명·하늘(밤/노을)·환경맵 + 태양(그림자)/하늘돔 추적
+    cameraRig.js      시점(추격/1인칭/조감) + 속도 FOV + 사고 셰이크
+    input.js          키보드/게임패드/터치 → 아날로그 컨트롤 합성
+    branchDrive.js    플레이어 도로 구속 + 분기(램프) 진출/복귀/종점 상태기계
+    car.js            플레이어 차량 물리(아케이드 힘 모델, 아날로그 입력)
+    bots.js           AI 레이서 — 순항/커브 감속/추월/정체 탈출, 트래픽 충돌=리타이어
+    traffic.js        AI 트래픽 — 지정차로제, 차간 유지, 상향등 양보, 봇 인지
+    cockpit.js        1인칭 콕핏 — 계기판, 거울(룸/좌/우 개별 RT)
+    minimap.js · particles.js · physics.js · sky.js · sounds.js · npr.js · carPreview.js
+  map/
+    trackGenerator.js 시드 트랙(곡률 완만 보장 멀티그리드 스무딩) · branchRoad.js 분기
+    decorations.js    도시/강/산 장식(인스턴싱 — GLB meshopt 압축 금지 주의) · palette.js · roadArrows.js
+  utils/
+    assets.js         GLB 로더(meshopt 디코더, 이름 접두 탐색) · rng.js 시드 난수 · trackMath.js 최근접 탐색
+```
+
 ## 기술 스택
 
 - **렌더**: Three.js (r170) — 절차적 셰이더 창문, PCF 그림자, Bloom/비네트 포스트프로세싱
