@@ -11,7 +11,7 @@ export class InputSystem {
     // kb는 autoSteer/autodrive(개발용)가 직접 쓰는 공개 상태 — 필드명 유지
     this.kb = { forward: false, backward: false, left: false, right: false, highBeam: false };
     this.pad = { steer: 0, throttle: 0, brake: 0, high: false };
-    this.touch = { throttle: false, brake: false, high: false };
+    this.touch = { high: false }; // 가감속·조향은 조이스틱(stick) 전담
     // 가상 조이스틱(모바일): x/y ∈ [-1,1] — x=조향(화면 오른쪽 +), y=아래 +
     this.stick = { id: null, x: 0, y: 0 };
     this._touchBinds = []; // [el, type, fn] — 해제용
@@ -59,8 +59,6 @@ export class InputSystem {
       }
     };
     const t = this.touch;
-    bind('#tc-accel', () => { t.throttle = true; }, () => { t.throttle = false; });
-    bind('#tc-brake', () => { t.brake = true; }, () => { t.brake = false; });
     bind('#tc-beam', () => { t.high = true; }, () => { t.high = false; });
     bind('#tc-cam', () => this.onToggleView(), null); // 탭 = 시점 전환
 
@@ -154,8 +152,8 @@ export class InputSystem {
     const steer = (k.left ? 1 : 0) - (k.right ? 1 : 0) + p.steer - sx;
     return {
       steer: THREE.MathUtils.clamp(steer, -1, 1),
-      throttle: Math.max(k.forward ? 1 : 0, p.throttle, t.throttle ? 1 : 0, Math.max(0, -sy)),
-      brake: Math.max(k.backward ? 1 : 0, p.brake, t.brake ? 1 : 0, Math.max(0, sy)),
+      throttle: Math.max(k.forward ? 1 : 0, p.throttle, Math.max(0, -sy)),
+      brake: Math.max(k.backward ? 1 : 0, p.brake, Math.max(0, sy)),
       highBeam: k.highBeam || p.high || t.high,
     };
   }
