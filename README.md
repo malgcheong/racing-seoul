@@ -76,7 +76,6 @@ src/
   | Hyundai Ioniq 5 lowpoly | andikapratamaw |
   | 2017 Hyundai Sonata Hybrid | m3ika3D |
   | 1998 Hyundai Aero Space Coach Bus | ImperialBlue3D |
-  | Bmw 8 car | itsrit3sh |
   | Mercedes Benz G-Class W263 | Lexyc16 |
   | Chevrolet Damas | own.guest |
   | Hyundai Porter II (Bongo III) | yunho98 |

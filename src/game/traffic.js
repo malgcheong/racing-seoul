@@ -92,13 +92,6 @@ function makeSonata() {
   };
 }
 
-function makeBmw8() {
-  return {
-    ...buildFromTemplate('trafficBmw8', {}),
-    dims: { w: 1.9, l: 4.84, mass: 1900, slow: false },
-  };
-}
-
 function makeGClass() {
   return {
     ...buildFromTemplate('trafficGClass', {}),
@@ -130,9 +123,27 @@ function makeXcient() {
 
 // 고속버스(에어로 스페이스): 리버리 유지(틴트 없음), 트럭류 차로 규칙(slow) 적용
 function makeBus() {
+  const built = buildFromTemplate('trafficBus', {});
+  // 순백(ffffff) 차체가 헤드라이트를 정통으로 받으면 후면 전체가 백열등처럼
+  // 타올라(블룸) 후미등이 씻겨 보인다 — 알베도를 낮추고 광택을 죽여 야간 톤에 맞춘다
+  built.group.traverse((o) => {
+    if (!o.isMesh) return;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+      if (m && !m.userData.busToned && !/^TTail/.test(m.name || '')) {
+        // 0.33: 순백 벽은 근거리 헤드라이트 조도가 톤매핑을 수 배 넘겨 백열등처럼
+        // 클립된다 — 회색 차체로 낮춰 일반 추종 거리(15m+)에서 자연스럽게
+        m.color.setScalar(0.33);
+        m.roughness = Math.max(m.roughness ?? 0.5, 0.8);
+        m.userData.busToned = true; // 템플릿 공유 재질 — 1회만
+      }
+    });
+  });
   return {
-    ...buildFromTemplate('trafficBus', {}),
-    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true },
+    ...built,
+    // tailScale: 후미등 발광 감광 — 이 모델은 후미등이 폭 2m 스트립 하나라
+    // 승용차 기준 강도(4.2/1.3)를 그대로 주면 블룸+톤매핑에서 코어가 하얗게
+    // 타버린다(거대한 백색 사각형처럼 보임)
+    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true, tailScale: 0.35 },
   };
 }
 
@@ -161,15 +172,15 @@ export class TrafficSystem {
     this._others = []; // 봇 레이서 등 추가 장애물 [{s, lat, speed}] — control에서 갱신
     const count = opts.count ?? 8;
     for (let i = 0; i < count; i++) {
-      // 차종 믹스: 승용 5종(아이오닉5·쏘나타·BMW8·G-Class·다마스) + 트럭/버스 3종
+      // 차종 믹스: 승용 4종(아이오닉5·쏘나타·G-Class·다마스) + 트럭/버스 3종
+      // (BMW8은 사용자 결정으로 제외 — 2026-07-23)
       const roll = this.rng();
       let built;
-      if (roll < 0.16) built = makeIoniq5();
-      else if (roll < 0.32) built = makeSonata();
-      else if (roll < 0.46) built = makeBmw8();
-      else if (roll < 0.60) built = makeGClass();
-      else if (roll < 0.72) built = makeDamas();
-      else if (roll < 0.84) built = makeBongo();
+      if (roll < 0.19) built = makeIoniq5();
+      else if (roll < 0.38) built = makeSonata();
+      else if (roll < 0.55) built = makeGClass();
+      else if (roll < 0.70) built = makeDamas();
+      else if (roll < 0.83) built = makeBongo();
       else if (roll < 0.93) built = makeXcient();
       else built = makeBus();
       const wrap = new THREE.Group();
@@ -181,7 +192,7 @@ export class TrafficSystem {
       body.__traffic = true; // 충돌 즉시 실패 규칙 대상(플레이어·봇 공통)
       this.cars.push({
         wrap, body, tailMat: built.tailMat, blinkL: built.blinkL, blinkR: built.blinkR,
-        len: d.l, slow: d.slow,
+        len: d.l, slow: d.slow, tailScale: d.tailScale ?? 1,
         s: 0, lane: 0, speed: 0, effSpeed: 0, laneIdx: 0, targetLane: 0,
         laneChangeTimer: 0, blinkSide: 0, blinkPhase: 0, active: false,
         signalTimer: 0, pendingIdx: 0, pendingLane: 0, // 차선변경 사전 신호
@@ -441,7 +452,7 @@ export class TrafficSystem {
       }
       car.effSpeed += (cap - car.effSpeed) * Math.min(1, 3 * dt); // 부드럽게 가감속
       const braking = car.effSpeed < car.speed - 1.5;
-      if (car.tailMat) car.tailMat.emissiveIntensity = braking ? 4.2 : 1.3;
+      if (car.tailMat) car.tailMat.emissiveIntensity = (braking ? 4.2 : 1.3) * car.tailScale;
 
       car.s = Math.min(this.L - 6, car.s + car.effSpeed * dt);
 
