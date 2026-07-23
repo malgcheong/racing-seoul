@@ -19,10 +19,8 @@ import { createWorld, clampToRoad } from './physics.js';
 import { toonifyScene } from './npr.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
-import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds } from './sky.js';
-
-const BASE_FOV = 68;
-const MAX_SPEED_ABS = 36;       // car.js MAX_SPEED와 동일 (속도감 연출 기준)
+import { buildSkyAndLights } from './sceneEnv.js';
+import { CameraRig, BASE_FOV } from './cameraRig.js';
 
 // 품질 프리셋: 성능 지렛대 3종만 조절 —
 //  dpr(픽셀비율, 화면 픽셀 수가 제곱으로 늘어 최대 비용) / 그림자맵 해상도 + 갱신 주기
@@ -100,60 +98,15 @@ export class Game {
     });
     this.renderer = this.view.renderer; // RT 렌더(콕핏 미러)·통계 등 직접 접근용 별칭
 
-    // 조명: 하늘/지면 색을 반영한 헤미스피어 + 그림자 태양광
-    // 야간: 은은한 도시광(헤미) + 달빛(방향광) / 노을: 낮은 주황 태양 + 보랏빛 헤미
+    // 조명·하늘·환경맵(시간대 무드)은 sceneEnv.js — follow()가 태양/돔 추적
     const dusk = this.palette.tod === 'dusk';
-    const hemi = dusk
-      ? new THREE.HemisphereLight(0x9a7fb8, 0x3a2a22, 0.5)
-      : new THREE.HemisphereLight(this.palette.skyHorizon, 0x0a0c16, 0.32);
-    const sun = dusk
-      ? new THREE.DirectionalLight(this.palette.sunColor, 1.3)
-      : new THREE.DirectionalLight(0xaabdf5, 0.7);
-    // 노을 태양은 서쪽(목적지 방향 = -X) 지평선에 낮게 — 석양을 향해 달린다
-    this.sunDir = dusk
-      ? new THREE.Vector3(-0.86, 0.16, 0.28).normalize()
-      : new THREE.Vector3(0.5, 0.72, 0.34).normalize();
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(this.quality.shadow, this.quality.shadow);
-    sun.shadow.camera.left = -95;
-    sun.shadow.camera.right = 95;
-    sun.shadow.camera.top = 95;
-    sun.shadow.camera.bottom = -95;
-    sun.shadow.camera.near = 30;
-    sun.shadow.camera.far = 600;
-    sun.shadow.camera.updateProjectionMatrix(); // 속성 변경 후 필수
-    sun.shadow.bias = -0.0006;
-    this.sun = sun;
-    this.scene.add(hemi, sun, sun.target);
+    this.env = buildSkyAndLights(this.scene, this.renderer, this.palette, rng, this.quality);
+    this.skyLife = this.env.skyLife;
 
-    // 밤하늘: 돔 + 별 필드 + 달을 한 그룹으로 묶어 카메라를 따라가게 한다
-    // (무한히 먼 것처럼 보이게 해 시차로 흔들리지 않도록. 달은 달빛 방향과 일치)
-    this.skyDome = new THREE.Group();
-    this.skyDome.add(makeSky(this.palette, 4200, this.sunDir));
-    if (dusk) {
-      // 노을: 태양 원반 + 낮은 구름 띠 + 초저녁 별 몇 개
-      const dimStars = makeStars(220);
-      dimStars.material.opacity = 0.4;
-      dimStars.material.transparent = true;
-      this.skyDome.add(dimStars);
-      this.skyDome.add(makeDuskSun(this.sunDir));
-      this.skyDome.add(makeDuskClouds(rng, this.sunDir));
-    } else {
-      this.skyDome.add(makeStars());
-      this.skyDome.add(makeMoon(this.sunDir));
-    }
-    this.skyLife = makeSkyLife(); // 비행기 점멸등 + 유성
-    this.skyDome.add(this.skyLife.group);
-    this.scene.add(this.skyDome);
-
-    // 하늘을 환경맵으로 구워 젖은 노면·차체에 은은한 시트(sheen) 반사
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    const envScene = new THREE.Scene();
-    envScene.add(makeSky(this.palette, 50, this.sunDir));
-    this.scene.environment = pmrem.fromScene(envScene, 0.05, 0.1, 100).texture;
-    // 노을 환경맵은 밝아서 젖은 노면이 통째로 주황으로 타오른다 — 세게 낮춘다
-    this.scene.environmentIntensity = dusk ? 0.3 : 0.35;
-    pmrem.dispose();
+    // 카메라 리그(추격/1인칭/조감 + FOV·사고 셰이크)는 cameraRig.js
+    this.rig = new CameraRig(this.camera, {
+      topViewH: parseFloat(this.params.get('top')) || 0, // 개발·검증: ?top=220 조감 뷰
+    });
 
     this.particles = new ParticleSystem(this.scene);
 
@@ -343,7 +296,6 @@ export class Game {
       this.car.placeAt(mine.pos, mine.heading);
       this._gridIdx = mine.gi; // 아래 currentSampleIdx 초기화가 이 값을 쓴다
     }
-    this.crashShake = 0;
     // 니어미스 칼치기 → 부스터 게이지 충전(점수 없음)
     this.boostGauge = 0;   // 0~1, 차면 부스터 발동
     this.flash = null;     // 중앙 팝업 { t, label, sub?, close? }
@@ -408,8 +360,8 @@ export class Game {
     window.addEventListener('resize', this.onResize);
 
     // 첫 프레임 렌더 (카운트다운 배경)
-    this.updateCamera(true);
-    this.updateSun();
+    this.rig.update(this.car, { fpView: this.fpView, eye: this.cockpit?.eye, snap: true });
+    this.env.follow(this.car.group.position, this.camera.position);
     this.view.renderFrame();
   }
 
@@ -542,7 +494,7 @@ export class Game {
     if (this.finished) return;
     this.finished = true;
     this.failed = true; // 순위표: 사고 리타이어 표시용
-    this.crashShake = 1.4; // 사고 임팩트 셰이크(감쇠는 updateCamera가 처리)
+    this.rig.addShake(1.4); // 사고 임팩트 셰이크(감쇠는 rig.update가 처리)
     sounds.engineStop();
     const result = {
       totalTime: this.raceTime,
@@ -572,66 +524,6 @@ export class Game {
     if (this.boostGauge >= 1) { this.car.boost(2.2); this.boostGauge = 0; sounds.boost?.(); }
     sounds.whoosh?.(dir); // 스친 방향에서 도플러 "휙"
     this.flash = { t: 0.9, label: prox > 0.6 ? '아슬아슬!' : '니어미스!', close: prox > 0.6 };
-  }
-
-  updateCamera(snap = false) {
-    const car = this.car.group;
-    // 개발·검증: ?top=220 → 차 위 조감 뷰 (배치 문제 확인용)
-    if (this.topViewH === undefined) {
-      const tv = parseFloat(this.params.get('top'));
-      this.topViewH = Number.isNaN(tv) ? 0 : tv;
-    }
-    if (this.topViewH > 0) {
-      this.camera.position.set(car.position.x + 1, car.position.y + this.topViewH, car.position.z);
-      this.camera.lookAt(car.position);
-      this.camera.updateProjectionMatrix();
-      return;
-    }
-    let lookAt;
-    if (this.fpView) {
-      // 1인칭(운전석 뷰): 지연 없이 차에 고정 — 카메라 랙이 있으면 멀미난다.
-      // 좌핸들 운전석 = 차 로컬 +X(왼쪽) 오프셋. cockpit.js의 DX와 맞춘다.
-      const h = this.car.heading;
-      const fwd = new THREE.Vector3(Math.sin(h), 0, Math.cos(h));
-      const leftV = new THREE.Vector3(Math.cos(h), 0, -Math.sin(h)); // 로컬 +X
-      const eye = this.cockpit?.eye || { x: 0.45, y: 1.42, z: 0.55 };
-      this.camera.position.copy(car.position)
-        .addScaledVector(fwd, eye.z)
-        .addScaledVector(leftV, eye.x)
-        .add(new THREE.Vector3(0, eye.y, 0));
-      lookAt = this.camera.position.clone().addScaledVector(fwd, 40);
-    } else {
-      const back = new THREE.Vector3(
-        -Math.sin(this.car.heading),
-        0,
-        -Math.cos(this.car.heading)
-      );
-      const target = car.position
-        .clone()
-        .addScaledVector(back, 11 + this.car.speed * 0.08)
-        .add(new THREE.Vector3(0, 5.5, 0));
-      if (snap) this.camera.position.copy(target);
-      else this.camera.position.lerp(target, 0.08);
-      lookAt = car.position.clone().add(new THREE.Vector3(0, 1.8, 0));
-    }
-
-    // 속도감: 고속·부스터에서 시야각이 벌어지고 카메라가 미세하게 흔들림
-    const speedRatio = Math.min(1, Math.abs(this.car.speed) / MAX_SPEED_ABS);
-    const boosting = this.car.boostTimer > 0;
-    const targetFov = BASE_FOV + speedRatio * speedRatio * 9 + (boosting ? 7 : 0);
-    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.07);
-    this.camera.updateProjectionMatrix();
-
-    // 화면 흔들림은 '내 차 충돌' 때만 (속도·부스터 셰이크 제거). 1인칭에선 미적용(사용자 피드백)
-    if (this.crashShake > 0) this.crashShake = Math.max(0, this.crashShake - 0.03);
-    const shake = this.fpView ? 0 : this.crashShake || 0;
-    if (shake > 0.01) {
-      this.camera.position.x += (Math.random() - 0.5) * shake;
-      this.camera.position.y += (Math.random() - 0.5) * shake * 0.6;
-      this.camera.position.z += (Math.random() - 0.5) * shake;
-    }
-
-    this.camera.lookAt(lookAt);
   }
 
   // 시점 전환: 1인칭에선 차체 모델 대신 콕핏을 보여준다(헤드라이트는 group 소속이라 유지)
@@ -724,16 +616,6 @@ export class Game {
         L.intensity = 0;
       }
     }
-  }
-
-  // 태양(그림자 카메라)이 차량을 따라다니며 주변에만 고해상도 그림자를 드리움
-  updateSun() {
-    const pos = this.car.group.position;
-    this.sun.position.copy(pos).addScaledVector(this.sunDir, 280);
-    this.sun.target.position.copy(pos);
-    this.sun.target.updateMatrixWorld();
-    // 하늘 돔(별·달)은 카메라를 따라가 무한히 먼 것처럼 보이게 (시차 제거)
-    if (this.skyDome) this.skyDome.position.copy(this.camera.position);
   }
 
   // 부스터 불꽃 / 드리프트 스모크
@@ -1035,9 +917,13 @@ export class Game {
     this.envUpdate?.(this.worldTime, dt);
     this.skyLife?.update(this.worldTime, dt);
     this.particles.update(dt);
-    this.updateCamera();
+    this.rig.update(this.car, {
+      fpView: this.fpView,
+      eye: this.cockpit?.eye,
+      boosting: this.car.boostTimer > 0,
+    });
     this.updateCockpit(dt);
-    this.updateSun();
+    this.env.follow(this.car.group.position, this.camera.position);
     this.updateLampLights();
     this.view.tickShadow(); // 그림자 격프레임 갱신
     if (this.showStats) this.renderer.info.reset();
