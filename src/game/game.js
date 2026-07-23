@@ -15,7 +15,8 @@ import { ParticleSystem } from './particles.js';
 import { buildEnvironment } from '../map/decorations.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
-import { createWorld, clampToRoad } from './physics.js';
+import { createWorld } from './physics.js';
+import { BranchDriver } from './branchDrive.js';
 import { toonifyScene } from './npr.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
@@ -145,17 +146,23 @@ export class Game {
     // '폐쇄'(2026-07-16) — 진입을 막고 본선 직진만 유일한 결승 경로로 둔다.
     // (?branch=open 으로 개발 중 임시 개방 가능)
     this.branch = generateBranchRoute(track.samples, track.river, track.width);
-    this.branchClosed = this.params.get('branch') !== 'open';
-    this.onBranch = false;
-    this.branchIdx = 0;
+    const branchClosed = this.params.get('branch') !== 'open';
     // 진출차로 판정용: 본선 가장자리 lat(이 선을 넘어야 분기 진입으로 본다)
-    this.branchEdgeLat = track.width / 2 - 0.25;
-    this.branchWinN = this.branch ? Math.round(this.branch.approachLen / segLen) + 3 : 0;
+    const branchEdgeLat = track.width / 2 - 0.25;
+    // 분기 주행(진출 창·클램프·복귀·종점)은 branchDrive.js 상태기계가 담당
+    this.branchDrive = new BranchDriver(this.branch, this.samples, {
+      segLen,
+      laneMin: this.laneMin,
+      laneMax: this.laneMax,
+      edgeLat: branchEdgeLat,
+      closed: branchClosed,
+      onScrape: () => this.railScrape(),
+    });
     const gaps = [];
     let branchCoarse = null;
     let branchGroup = null;
     if (this.branch) {
-      branchGroup = buildBranchRoad(this.branch, track.samples, track.width, track.river, this.branchClosed);
+      branchGroup = buildBranchRoad(this.branch, track.samples, track.width, track.river, branchClosed);
       this.scene.add(branchGroup);
       // 올림픽대로 종점 = 대체 결승선 — 합류 후엔 강변도로 남행 반부만 달리므로 그 폭으로
       this.scene.add(buildStartLine(this.branch.samples, 7.2,
@@ -182,7 +189,7 @@ export class Game {
         for (const lat of laneLats) spots.push({ i: ai, lat, bend: 0 });
       }
       if (this.branch) {
-        const latX = this.branchEdgeLat + this.branch.laneW / 2 - 0.2;
+        const latX = branchEdgeLat + this.branch.laneW / 2 - 0.2;
         for (const back of [60, 35, 12]) {
           spots.push({ i: this.branch.exitIdx - Math.round(back / segLen), lat: latX, bend: 1 });
         }
@@ -314,8 +321,7 @@ export class Game {
     } else if (this.branch && parseInt(branchParam, 10) >= 2) {
       const bi = Math.min(this.branch.samples.length - 20, parseInt(branchParam, 10));
       const bsmp = this.branch.samples[bi];
-      this.onBranch = true;
-      this.branchIdx = bi;
+      this.branchDrive.forceOn(bi);
       this.currentSampleIdx = this.branch.exitIdx;
       this.car.placeAt(bsmp.pos.clone(), Math.atan2(bsmp.tangent.x, bsmp.tangent.z));
     }
@@ -446,39 +452,6 @@ export class Game {
     document.querySelector('.controls-hint')?.classList.remove('faded'); // 새 판마다 리셋
     sounds.engineStart(); // 엔진 루프(합성) — GO와 함께 시동
     this.loop();
-  }
-
-  // 트랙 위 최근접 샘플 탐색 (인접 구간만 훑는 O(1) 윈도우 탐색, 개방 트랙: 클램프)
-  findNearestSample() {
-    const n = this.samples.length;
-    const pos = this.car.group.position;
-    let bestIdx = this.currentSampleIdx;
-    let bestDist = Infinity;
-    const lo = Math.max(0, this.currentSampleIdx - 40);
-    const hi = Math.min(n - 1, this.currentSampleIdx + 40);
-    for (let i = lo; i <= hi; i++) {
-      const d = pos.distanceToSquared(this.samples[i].pos);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-    this.currentSampleIdx = bestIdx;
-    return { idx: bestIdx, dist: Math.sqrt(bestDist) };
-  }
-
-  // 임의 샘플 배열에서 가장 가까운 인덱스 (수평 거리 — 분기는 고도가 달라짐)
-  nearestSampleOf(arr, guess, win, pos = null) {
-    const p = pos || this.car.body.position;
-    let bi = guess, bd = Infinity;
-    const lo = Math.max(0, guess - win);
-    const hi = Math.min(arr.length - 1, guess + win);
-    for (let i = lo; i <= hi; i++) {
-      const dx = p.x - arr[i].pos.x, dz = p.z - arr[i].pos.z;
-      const d = dx * dx + dz * dz;
-      if (d < bd) { bd = d; bi = i; }
-    }
-    return { idx: bi, dist: Math.sqrt(bd) };
   }
 
   // 대향 차량과 충돌 → (하드모드) 즉시 게임 실패. 하드모드 off면 물리 충돌만
@@ -727,87 +700,13 @@ export class Game {
       if (this.bots) this.bots.control(dt, this.collectObstacles(), this.raceTime); // 봇 구동/조향 힘
       this.world.step(1 / 60, dt, 3);             // 강체 적분(충돌 해결)
 
-      // 플레이어: 도로 폭 안으로 클램프(중앙 넘기 가능, 가장자리만 배리어) + 동기화.
-      // 분기 진출 구간(개방 시)에선 우측 한계를 넓혀 진입 가능.
+      // 플레이어 도로 구속(본선 클램프 + 분기 진출/복귀/고도/종점)은 branchDrive.js
       this.car.sync();
-      if (!this.onBranch) {
-        this.findNearestSample();
-        let maxRight = this.laneMax;
-        // 분기 진출 창: 진출차로가 열린 만큼만 우측을 열고, 차가 본선 가장자리
-        // 실선을 실제로 넘어 차선에 올라타면 분기 모드로 전환(실도로 진출 방식).
-        // 폐쇄 시엔 이 블록을 건너뛰어 우측이 안 열림 → 본선 갓길에서 막힌다.
-        if (this.branch && !this.branchClosed) {
-          const bofs = this.currentSampleIdx - this.branch.exitIdx;
-          if (bofs > -this.branchWinN && bofs < Math.round(70 / this.segLen)) {
-            // 테이퍼 진행에 비례해 우측 한계 확장, 고어 뒤엔 완전 개방
-            const dApp = (bofs + this.branchWinN - 3) * this.segLen;
-            const laneW = Math.min(this.branch.laneW,
-              (this.branch.laneW * Math.max(0.1, dApp)) / this.branch.taperLen);
-            maxRight = Math.max(maxRight,
-              bofs > 0 ? 30 : this.branchEdgeLat + Math.max(laneW - 1.2, 0.3));
-            const bres = this.nearestSampleOf(this.branch.samples, this.branchIdx, 90);
-            this.branchIdx = bres.idx;
-            const ms = this.samples[this.currentSampleIdx];
-            const px = this.car.body.position.x, pz = this.car.body.position.z;
-            const mDist = Math.hypot(px - ms.pos.x, pz - ms.pos.z);
-            const lat = (px - ms.pos.x) * ms.left.x + (pz - ms.pos.z) * ms.left.z;
-            if (bres.idx > 4 && lat > this.branchEdgeLat - 0.6 && bres.dist < mDist - 0.6) {
-              this.onBranch = true;
-            }
-          } else {
-            this.branchIdx = 0; // 진출 창 밖 — 다음 접근을 위해 리셋
-          }
-        }
-        if (!this.onBranch) {
-          // 벽 밀착 감지(클램프 한계 초과) → 가드레일/분리대 긁힘 효과음
-          const csm = this.samples[this.currentSampleIdx];
-          const latC = (this.car.body.position.x - csm.pos.x) * csm.left.x
-            + (this.car.body.position.z - csm.pos.z) * csm.left.z;
-          if ((latC > maxRight + 0.05 || latC < this.laneMin - 0.05) && Math.abs(this.car.speed) > 4) {
-            this.railScrape();
-          }
-          // 좌측 한계는 중앙분리대(왕복 도로) — 대향 차로로 못 넘어간다
-          clampToRoad(this.car.body, this.samples[this.currentSampleIdx], this.laneMin, maxRight);
-        }
-      }
-      if (this.onBranch) {
-        // 분기 주행: 분기 샘플 기준 클램프 + 고도 추종(물리는 XZ 평면이라 y는 수동)
-        const bres = this.nearestSampleOf(this.branch.samples, this.branchIdx, 60);
-        this.branchIdx = bres.idx;
-        // 고어 전(진출차로 위)에선 본선 복귀 허용 — 실도로처럼 차선만 걸친 상태라
-        // 왼쪽으로 되돌아가면 그대로 직진(강제 진출 방지)
-        let backToMain = false;
-        if (this.branch.dists[this.branchIdx] < this.branch.approachLen - 4) {
-          const mres = this.nearestSampleOf(this.samples, this.currentSampleIdx, 90);
-          const ms2 = this.samples[mres.idx];
-          const lat2 = (this.car.body.position.x - ms2.pos.x) * ms2.left.x +
-                       (this.car.body.position.z - ms2.pos.z) * ms2.left.z;
-          if (lat2 < this.branchEdgeLat - 1.5) {
-            this.onBranch = false;
-            this.currentSampleIdx = mres.idx;
-            backToMain = true;
-          }
-        }
-        if (!backToMain) {
-          const bs = this.branch.samples[this.branchIdx];
-          // 벽 밀착 감지(분기 연석/파라펫) → 긁힘 효과음
-          const latB = (this.car.body.position.x - bs.pos.x) * bs.left.x
-            + (this.car.body.position.z - bs.pos.z) * bs.left.z;
-          const bLo = this.branch.clampLo[this.branchIdx];
-          const bHi = this.branch.clampHi[this.branchIdx];
-          if ((latB > bHi + 0.05 || latB < bLo - 0.05) && Math.abs(this.car.speed) > 4) {
-            this.railScrape();
-          }
-          // 구간별 비대칭 클램프: 진출차로/램프는 대칭, 합류 차선에선 서쪽(본선 남행
-          // 차로)으로 크게 열려 언제든 도로로 건너갈 수 있다
-          clampToRoad(this.car.body, bs, bLo, bHi);
-          this.car.body.position.y += (bs.pos.y - this.car.body.position.y) * Math.min(1, 10 * dt);
-          // 올림픽대로 종점 도착 = 완주 (재합류 없음 — 대체 목적지)
-          if (!this.finished && this.branchIdx >= this.branch.samples.length - 30) {
-            this.finished = true;
-            this.finish();
-          }
-        }
+      const road = this.branchDrive.step(this.car, this.currentSampleIdx, dt);
+      this.currentSampleIdx = road.mainIdx;
+      if (road.finished && !this.finished) {
+        this.finished = true;
+        this.finish(); // 올림픽대로 종점 = 대체 목적지 완주
       }
       this.car.sync();
       if (this.traffic) this.traffic.postStep(this.laneMax);
@@ -835,17 +734,10 @@ export class Game {
           this.bots?.list.map((b) => b.car.group.position) ?? []);
       }
 
-      // 분기 사전 안내: 출구 500m/150m 전 1회씩 (분기 미진입 상태에서만, 폐쇄 시 없음)
-      if (this.branch && !this.branchClosed && !this.onBranch && !this.finished) {
-        const dEx = (this.branch.exitIdx - this.currentSampleIdx) * this.segLen;
-        if (dEx > 0 && dEx < 500 && !this._exitN1) {
-          this._exitN1 = true;
-          this.flash = { t: 2.4, label: '올림픽대로 출구 500m', sub: '우측 진출차로 이용' };
-        }
-        if (dEx > 0 && dEx < 160 && !this._exitN2) {
-          this._exitN2 = true;
-          this.flash = { t: 2.2, label: '출구 앞', sub: '지금 우측 차선으로 →' };
-        }
+      // 분기 사전 안내(출구 500m/150m 전 1회씩) — 폐쇄/미진입 조건은 driver가 판단
+      if (!this.finished) {
+        const bn = this.branchDrive.notice(this.currentSampleIdx);
+        if (bn) this.flash = bn;
       }
 
       // 조작 힌트: 주행 9초 뒤 페이드아웃 (?stats=1이면 통계 표시용이라 유지)
@@ -861,13 +753,9 @@ export class Game {
       this.emitDriveParticles();
       this.checkFinish();
 
-      // 진행률: 분기 주행 중엔 진출점→100%(올림픽대로 종점) 구간을 분기 진척도로 보간
-      const nAll = this.samples.length - 1;
-      const hudProgress = this.onBranch && this.branch
-        ? THREE.MathUtils.lerp(
-            this.branch.exitIdx / nAll, 1,
-            this.branchIdx / (this.branch.samples.length - 30))
-        : this.currentSampleIdx / nAll;
+      // 진행률: 분기 주행 중엔 진출점→100% 구간을 분기 진척도로 보간(driver)
+      const hudProgress = this.branchDrive.progress(
+        this.currentSampleIdx, this.samples.length - 1);
       this.lastProgress = hudProgress; // 순위 계산용
       // 실시간 순위 — 봇들의 진행률과 비교(완주 봇은 항상 위)
       let rank = null, racers = null;
