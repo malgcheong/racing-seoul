@@ -46,11 +46,25 @@ function buildFromTemplate(tplName, tints) {
         m.transparent = false;
         m.depthWrite = true;
         m.opacity = 1;
+        // 유리류는 대부분 roughness 0(거울면) — 불투명 전환 후 그대로 두면
+        // 헤드라이트 정반사가 블룸을 과하게 태워 뒷유리가 허옇게 번쩍인다(BMW8)
+        if (m.roughness < 0.35) m.roughness = 0.35;
         m.userData.tOpaqued = true; // 템플릿 공유 재질 — 1회만
       }
       // 후미등: GLB 익스포트 시 이름에 .001 등이 붙을 수 있어 접두 매칭
       if (m.name === 'TTail' || m.name.startsWith('TTail.')) {
-        if (!tailMat) tailMat = m.clone();
+        if (!tailMat) {
+          tailMat = m.clone();
+          // 베이스가 무채색 유리(BMW8: e7e7e7 + 거울면)면 외부광(뒤차 헤드라이트)을
+          // 받았을 때 적색 발광을 흰 반사가 덮는다 — 텍스처 없는 무채색 베이스만
+          // 표준 적색(아이오닉·쏘나타와 동일)으로 교정. 텍스처 적색(봉고)은 그대로.
+          const c = tailMat.color;
+          if (!tailMat.map && Math.abs(c.r - c.g) < 0.15 && Math.abs(c.g - c.b) < 0.15) {
+            c.setHex(0xb32730);
+            tailMat.metalness = 0;
+            tailMat.roughness = 0.5;
+          }
+        }
         return tailMat;
       }
       return tints[m.name] !== undefined ? tintedMat(m, tints[m.name]) : m;
