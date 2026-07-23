@@ -121,10 +121,13 @@ function makeXcient() {
   };
 }
 
+// 버스 후미등 발광면 — 리버리에 그려진 램프 클러스터 위에 얹는 쿼드(공유 지오)
+const _busGlowGeo = new THREE.PlaneGeometry(0.08, 0.055);
+
 // 고속버스(에어로 스페이스): 리버리 유지(틴트 없음), 트럭류 차로 규칙(slow) 적용.
-// 이 모델은 리버리 텍스처에 후미등 클러스터가 이미 정교하게 그려져 있다 —
-// 런타임 램프를 덧붙이는 시도는 모델 디테일과 겉돌아 폐기(사용자 피드백 2026-07-23).
-// 발광은 원본 스트립을 그대로 쓰되 tailScale로 크게 감광해 브레이크 신호만 은은히.
+// 이 모델은 리버리 텍스처에 후미등 클러스터가 그려져 있는데, 원본 발광 스트립은
+// 그보다 아래(번호판 높이)에 떠 있어 위치가 안 맞는다(사용자 지적 2026-07-23).
+// 스트립을 숨기고 그려진 클러스터 위치(상단 코너)에 발광 쿼드를 얹는다.
 function makeBus() {
   const built = buildFromTemplate('trafficBus', {});
   // 순백(ffffff) 차체가 헤드라이트를 정통으로 받으면 후면 전체가 백열등처럼
@@ -141,11 +144,27 @@ function makeBus() {
       }
     });
   });
+  // 원본 스트립(위치 오류) 숨기고, 그려진 램프 클러스터 위에 발광 쿼드 부착
+  let strip = null;
+  built.group.traverse((o) => {
+    if (!o.isMesh || strip) return;
+    const ms = Array.isArray(o.material) ? o.material : [o.material];
+    if (ms.includes(built.tailMat)) strip = o;
+  });
+  if (strip && built.tailMat) {
+    strip.visible = false;
+    const root = built.group.getObjectByName('Bus') || built.group;
+    for (const sx of [-1, 1]) {
+      const glow = new THREE.Mesh(_busGlowGeo, built.tailMat);
+      glow.position.set(sx * 0.16, 0.025, -1.003); // 상단 코너 클러스터 위, 3mm 돌출
+      glow.rotation.y = Math.PI; // 후면(-Z)을 향한다
+      root.add(glow);
+    }
+  }
   return {
     ...built,
-    // tailScale: 후미등이 전폭 스트립이라 승용차 기준 강도면 블룸에서 백색으로
-    // 타버린다 — 크게 감광(평시 0.45 / 브레이크 1.47 상당)
-    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true, tailScale: 0.35 },
+    // tailScale: 발광면이 클러스터 크기로 줄었으니 가벼운 감광만
+    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true, tailScale: 0.6 },
   };
 }
 
