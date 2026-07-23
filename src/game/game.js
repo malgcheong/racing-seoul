@@ -3,11 +3,7 @@
 // 봇 레이서는 bots.js로 분리.
 
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { View } from './view.js';
 import { generateTrack, buildRoadMesh, buildMedian, buildStartLine, MEDIAN_HALF } from '../map/trackGenerator.js';
 import { generateBranchRoute, buildBranchRoad } from '../map/branchRoad.js';
 import { buildRoadArrows } from '../map/roadArrows.js';
@@ -20,7 +16,7 @@ import { buildEnvironment } from '../map/decorations.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld, clampToRoad } from './physics.js';
-import { toonifyScene, InkEdgeShader } from './npr.js';
+import { toonifyScene } from './npr.js';
 import { sounds } from './sounds.js';
 import { createRng } from '../utils/rng.js';
 import { makeStars, makeMoon, makeSkyLife, makeSky, makeDuskSun, makeDuskClouds } from './sky.js';
@@ -36,32 +32,6 @@ const QUALITY = {
   low:    { dpr: 1.0,  shadow: 1024, shadowEvery: 3, traffic: 6 },
   medium: { dpr: 1.25, shadow: 2048, shadowEvery: 2, traffic: 10 },
   high:   { dpr: 1.6,  shadow: 4096, shadowEvery: 1, traffic: 16 },
-};
-
-// 화면 가장자리를 살짝 어둡게 (비네트)
-const VignetteShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    strength: { value: 0.4 },
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform sampler2D tDiffuse;
-    uniform float strength;
-    varying vec2 vUv;
-    void main() {
-      vec4 color = texture2D(tDiffuse, vUv);
-      float d = distance(vUv, vec2(0.5));
-      color.rgb *= 1.0 - smoothstep(0.3, 0.8, d) * strength;
-      gl_FragColor = color;
-    }
-  `,
 };
 
 export class Game {
@@ -112,36 +82,23 @@ export class Game {
   build(seed) {
     const rng = createRng(seed);
 
-    // 렌더러/씬
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-    // 성능: 고DPI에서 픽셀 수가 제곱으로 늘어 비용이 커짐. 품질 프리셋 dpr로 캡
-    // (?dpr= 파라미터가 있으면 개발용으로 우선)
-    const dprParam = parseFloat(this.params.get('dpr'));
-    this.renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, Number.isFinite(dprParam) ? dprParam : this.quality.dpr));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap; // Soft 대비 저렴(야간이라 차이 미미)
-    // 그림자 깊이 패스는 씬 전체를 한 번 더 그린다 — 격프레임 갱신으로 절반 절약.
-    // (태양이 차를 따라가며 미세 이동하는 정도라 한 프레임 지연은 티가 안 남)
-    this.renderer.shadowMap.autoUpdate = false;
-    this.renderer.shadowMap.needsUpdate = true;
-    this._shadowEvery = this.quality.shadowEvery; // N프레임마다 그림자 깊이 패스 갱신
-    this._shadowTick = 0;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.95;
-    this.container.appendChild(this.renderer.domElement);
-
+    // 씬/카메라 — 렌더러·포스트프로세싱(NPR 포함)은 view.js가 소유
     this.scene = new THREE.Scene();
     // 야간: 안개(원경 깊이감). 배경 산맥까지 바닥이 이어지고 산은 헤이즈에 녹아들도록.
     this.scene.fog = new THREE.Fog(this.palette.fog, 220, 2800);
-
     this.camera = new THREE.PerspectiveCamera(
       BASE_FOV,
       this.container.clientWidth / this.container.clientHeight,
       0.1,
       5200 // 하늘 돔(4200)·원경 산맥까지 커버
     );
+    this.view = new View(this.container, this.scene, this.camera, {
+      palette: this.palette,
+      quality: this.quality,
+      npr: this.npr,
+      dprOverride: parseFloat(this.params.get('dpr')),
+    });
+    this.renderer = this.view.renderer; // RT 렌더(콕핏 미러)·통계 등 직접 접근용 별칭
 
     // 조명: 하늘/지면 색을 반영한 헤미스피어 + 그림자 태양광
     // 야간: 은은한 도시광(헤미) + 달빛(방향광) / 노을: 낮은 주황 태양 + 보랏빛 헤미
@@ -197,38 +154,6 @@ export class Game {
     // 노을 환경맵은 밝아서 젖은 노면이 통째로 주황으로 타오른다 — 세게 낮춘다
     this.scene.environmentIntensity = dusk ? 0.3 : 0.35;
     pmrem.dispose();
-
-    // 포스트프로세싱: bloom(빛 번짐) + 비네트
-    // NPR 모드: 씬을 전용 RT(색+뎁스)에 그리고 컴포저는 읽기만 —
-    // 컴포저 핑퐁 버퍼에 뎁스를 부착하면 뒤 패스가 그 버퍼에 그릴 때
-    // "샘플 중 텍스처=렌더 대상" 피드백 루프로 화면이 깜빡인다(GL_INVALID_OPERATION)
-    this.composer = new EffectComposer(this.renderer);
-    if (this.npr) {
-      const ds = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-      this.nprRT = new THREE.WebGLRenderTarget(ds.x, ds.y, {
-        depthTexture: new THREE.DepthTexture(ds.x, ds.y),
-      });
-      this.edgePass = new ShaderPass(InkEdgeShader);
-      this.edgePass.uniforms.tScene.value = this.nprRT.texture;
-      this.edgePass.uniforms.tDepth.value = this.nprRT.depthTexture;
-      this.edgePass.uniforms.resolution.value.copy(ds);
-      this.edgePass.uniforms.cameraNear.value = this.camera.near;
-      this.edgePass.uniforms.cameraFar.value = this.camera.far;
-      this.composer.addPass(this.edgePass); // 씬 렌더는 renderFrame()에서 수동
-    } else {
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
-    }
-    this.bloomPass = new UnrealBloomPass(
-      // 절반 해상도 — 블룸은 블러라 반해상도로도 차이가 안 보이고 비용은 크게 줆
-      new THREE.Vector2(this.container.clientWidth / 2, this.container.clientHeight / 2),
-      // 야간: 광원만 은은하게 / 노을: 노면이 밝아 빛 웅덩이가 과하게 타므로 임계값 상향
-      dusk ? 0.3 : 0.38, 0.45, dusk ? 0.88 : 0.72
-    );
-    this.composer.addPass(this.bloomPass);
-    this.vignettePass = new ShaderPass(VignetteShader);
-    this.vignettePass.uniforms.strength.value = 0.4; // 야간 무드용 고정 비네트
-    this.composer.addPass(this.vignettePass);
-    this.composer.addPass(new OutputPass());
 
     this.particles = new ParticleSystem(this.scene);
 
@@ -478,43 +403,14 @@ export class Game {
     this.input.bind();
     this.onResize = () => {
       if (this.disposed) return;
-      const w = this.container.clientWidth;
-      const h = this.container.clientHeight;
-      this.camera.aspect = w / h;
-      this.camera.updateProjectionMatrix();
-      this.renderer.setSize(w, h);
-      this.composer.setSize(w, h);
-      this._resizeNprRT();
+      this.view.onResize();
     };
     window.addEventListener('resize', this.onResize);
 
     // 첫 프레임 렌더 (카운트다운 배경)
     this.updateCamera(true);
     this.updateSun();
-    this.renderFrame();
-  }
-
-  // NPR: 씬을 전용 RT(색+뎁스)에 먼저 그리고 컴포저(엣지→블룸→비네트)는 읽기만
-  renderFrame() {
-    if (this.npr) {
-      this.renderer.setRenderTarget(this.nprRT);
-      this.renderer.render(this.scene, this.camera);
-      this.renderer.setRenderTarget(null);
-    }
-    this.composer.render();
-  }
-
-  // NPR RT는 뎁스텍스처 크기를 함께 바꿔야 해서 리사이즈 시 재생성이 안전
-  _resizeNprRT() {
-    if (!this.nprRT) return;
-    const ds = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    this.nprRT.dispose();
-    this.nprRT = new THREE.WebGLRenderTarget(ds.x, ds.y, {
-      depthTexture: new THREE.DepthTexture(ds.x, ds.y),
-    });
-    this.edgePass.uniforms.tScene.value = this.nprRT.texture;
-    this.edgePass.uniforms.tDepth.value = this.nprRT.depthTexture;
-    this.edgePass.uniforms.resolution.value.copy(ds);
+    this.view.renderFrame();
   }
 
   // ── 순위표: 완주자(기록순) → 미완주자(사고/주행중, 진행률순). 나+봇 전원 ──
@@ -1143,11 +1039,9 @@ export class Game {
     this.updateCockpit(dt);
     this.updateSun();
     this.updateLampLights();
-    // 그림자 격프레임 갱신 (autoUpdate=false 페어)
-    this._shadowTick = (this._shadowTick + 1) % this._shadowEvery;
-    if (this._shadowTick === 0) this.renderer.shadowMap.needsUpdate = true;
+    this.view.tickShadow(); // 그림자 격프레임 갱신
     if (this.showStats) this.renderer.info.reset();
-    this.renderFrame();
+    this.view.renderFrame();
 
     // 자동 품질: 주행 시작 후 첫 4초 FPS를 재고 낮으면 해상도·그림자를 강등.
     // (트래픽 대수는 이미 스폰돼 런타임 변경이 까다로우니 dpr·그림자 주기만 조정)
@@ -1157,14 +1051,8 @@ export class Game {
       if (this._autoAcc >= 4) {
         this._autoDone = true;
         const fps = this._autoN / this._autoAcc;
-        let dpr = null;
-        if (fps < 42) { dpr = 1.0; this._shadowEvery = 3; }
-        else if (fps < 55) { dpr = 1.25; this._shadowEvery = 2; }
-        if (dpr) {
-          this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dpr));
-          this.composer.setSize(this.container.clientWidth, this.container.clientHeight);
-          this._resizeNprRT();
-        }
+        if (fps < 42) this.view.applyQuality({ dpr: 1.0, shadowEvery: 3 });
+        else if (fps < 55) this.view.applyQuality({ dpr: 1.25, shadowEvery: 2 });
       }
     }
 
@@ -1194,8 +1082,6 @@ export class Game {
     this.traffic?.dispose();
     this.bots?.dispose();
     for (const m of this.cockpit?.mirrors ?? []) m.rt.dispose();
-    this.composer?.dispose();
-    this.renderer?.dispose();
-    this.renderer?.domElement?.remove();
+    this.view?.dispose();
   }
 }
