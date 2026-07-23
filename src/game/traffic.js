@@ -38,6 +38,16 @@ function buildFromTemplate(tplName, tints) {
   g.traverse((o) => {
     if (!o.isMesh) return;
     const remap = (m) => {
+      // 로우폴리 차체 셸: 유리를 텍스처 알파(BLEND)로 베이크한 모델은 로더가
+      // transparent+depthWrite=false를 줘 뒷면이 뚫려 보인다(내부가 없어 바퀴·
+      // 자기 헤드라이트까지 비침 — 이오닉5 등 5종). 밤 트래픽에 유리 투과는
+      // 불필요 — 불투명 전환(창은 텍스처 색 그대로 남는다)
+      if (m && m.transparent && !m.userData.tOpaqued) {
+        m.transparent = false;
+        m.depthWrite = true;
+        m.opacity = 1;
+        m.userData.tOpaqued = true; // 템플릿 공유 재질 — 1회만
+      }
       // 후미등: GLB 익스포트 시 이름에 .001 등이 붙을 수 있어 접두 매칭
       if (m.name === 'TTail' || m.name.startsWith('TTail.')) {
         if (!tailMat) tailMat = m.clone();
