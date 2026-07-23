@@ -235,14 +235,16 @@ export class TrafficSystem {
     car.villain = !car.slow && this.rng() < 0.18;
     if (car.villain) {
       car.laneIdx = 0;
-      car.speed = 13 + this.rng() * 5; // 정속(느긋) — 추월차로에서 길을 막는다
+      // 정속 빌런 — 추월차로에서 제한속도 언저리(63~72km/h)로 길을 막는다
+      car.speed = 17.5 + this.rng() * 2.5;
     } else {
       car.laneIdx = car.slow
         ? Math.min(maxIdx, 2) + Math.floor(this.rng() * Math.max(1, maxIdx - 1))
         : Math.min(maxIdx, 1) + Math.floor(this.rng() * Math.max(1, maxIdx));
       car.laneIdx = Math.min(maxIdx, car.laneIdx);
-      // 트럭류는 느리게(10~17), 승용차는 12~26 m/s (플레이어가 추월)
-      car.speed = car.slow ? 10 + this.rng() * 7 : 12 + this.rng() * 14;
+      // 도시고속도로 순항: 트럭류 65~80km/h, 승용차 72~101km/h
+      // (사용자 피드백 2026-07-23 "70은 나와야" — 기존 36~94는 너무 느렸다)
+      car.speed = car.slow ? 18 + this.rng() * 4 : 20 + this.rng() * 8;
     }
     car.yieldReq = 0; // 상향등 양보 요구 누적(초)
     car.escapeT = 0;  // 1차로 복귀용 임시 가속 타이머
