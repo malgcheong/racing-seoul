@@ -45,8 +45,11 @@ src/
     cockpit.js        1인칭 콕핏 — 계기판, 거울(룸/좌/우 개별 RT)
     minimap.js · particles.js · physics.js · sky.js · sounds.js · npr.js · carPreview.js
   map/
+    buildWorld.js     월드 조립(도로·분기·화살표·장식) — 주행 파라미터 반환
     trackGenerator.js 시드 트랙(곡률 완만 보장 멀티그리드 스무딩) · branchRoad.js 분기
-    decorations.js    도시/강/산 장식(인스턴싱 — GLB meshopt 압축 금지 주의) · palette.js · roadArrows.js
+    decorations.js    도시/도로변 배치 오케스트레이터 (GLB meshopt 압축 금지 주의)
+    env/              common(헬퍼·텍스처) · buildings(파사드·인스턴싱) · river(강·교량) · terrain(산)
+    palette.js · roadArrows.js
   utils/
     assets.js         GLB 로더(meshopt 디코더, 이름 접두 탐색) · rng.js 시드 난수 · trackMath.js 최근접 탐색
 ```
