@@ -46,7 +46,6 @@ function getNoiseBuffer(ac) {
 }
 
 export const sounds = {
-  boost() { tone(220, 0.4, 'sawtooth', 0.1); tone(440, 0.35, 'sawtooth', 0.08, 0.1); },
   countdown() { tone(440, 0.15, 'square', 0.1); },
   go() { tone(880, 0.4, 'square', 0.12); },
   finish() { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.35, 'triangle', 0.1, i * 0.13)); },
@@ -94,18 +93,18 @@ export const sounds = {
     eng = { master, osc1, osc2, engFilter, engGain, rumbleSrc, rumbleGain };
   },
 
-  // 매 프레임: kmh(속도), throttle(0~1), boost(부스터 중)
-  engineUpdate(kmh, throttle, boost) {
+  // 매 프레임: kmh(속도), throttle(0~1)
+  engineUpdate(kmh, throttle) {
     if (!eng || !ctx) return;
     const t = ctx.currentTime;
     // 가상 기어: 56km/h 구간마다 RPM이 감았다 다시 차오른다 (변속 느낌)
     const span = 56;
     const inGear = Math.min(1, (kmh % span) / span + 0.14);
-    const f = 30 + inGear * 44 + (boost ? 8 : 0); // 저회전 대배기량 — 높아도 ~82Hz
+    const f = 30 + inGear * 44; // 저회전 대배기량 — 높아도 ~82Hz
     eng.osc1.frequency.setTargetAtTime(f, t, 0.07);
     eng.osc2.frequency.setTargetAtTime(f * 0.5, t, 0.07);
     eng.engFilter.frequency.setTargetAtTime(170 + inGear * 380 + throttle * 150, t, 0.09);
-    eng.engGain.gain.setTargetAtTime(0.05 + throttle * 0.08 + (boost ? 0.03 : 0), t, 0.09);
+    eng.engGain.gain.setTargetAtTime(0.05 + throttle * 0.08, t, 0.09);
     eng.rumbleGain.gain.setTargetAtTime(0.045 + throttle * 0.075, t, 0.12);
   },
 

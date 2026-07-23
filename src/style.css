@@ -216,25 +216,6 @@ body {
   font-variant-numeric: tabular-nums; text-shadow: 0 2px 12px rgba(0,0,0,.6);
 }
 .hud-unit { font-size: 16px; font-weight: 400; color: var(--muted); margin-left: 6px; }
-.boost-indicator {
-  position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%);
-  font-size: 26px; font-weight: 800; color: var(--accent);
-  text-shadow: 0 0 18px rgba(255, 180, 84, .9);
-  animation: pulse .4s infinite alternate;
-}
-@keyframes pulse { from { opacity: .7; } to { opacity: 1; transform: translateX(-50%) scale(1.06); } }
-
-/* 부스터 게이지(칼치기 충전) */
-.boost-gauge {
-  position: absolute; left: 28px; bottom: 32px; width: 200px; height: 12px;
-  border-radius: 999px; background: rgba(10, 12, 25, .55);
-  border: 1px solid rgba(255,255,255,.15); overflow: hidden;
-}
-.boost-fill {
-  height: 100%; width: 0%; border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent2), var(--accent));
-  transition: width .12s linear;
-}
 /* 니어미스 팝업 */
 .nearmiss {
   position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
@@ -276,11 +257,9 @@ body {
 .tc-row { display: flex; gap: 12px; align-items: flex-end; }
 .tc-accel { width: 86px; height: 86px; border-radius: 50%; font-size: 26px; }
 .tc-brake { width: 66px; height: 66px; border-radius: 50%; font-size: 20px; }
-.tc-drift { height: 50px; padding: 0 16px; border-radius: 14px; font-size: 13px; }
 .tc-mini { padding: 8px 14px; border-radius: 10px; font-size: 12px; font-weight: 400; }
 /* 터치 모드: 버튼과 겹치는 HUD(속도계·부스터 게이지·미니맵)를 위로 올림 */
 .touch-mode .hud-speed { bottom: 132px; right: 22px; font-size: 42px; }
-.touch-mode .boost-gauge { bottom: 128px; }
 .touch-mode .minimap { bottom: 220px; }
 .touch-mode .controls-hint { display: none; }
 

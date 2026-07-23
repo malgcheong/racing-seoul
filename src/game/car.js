@@ -1,5 +1,5 @@
 // 물리 엔진(cannon-es) 기반 차량. 평면 강체 + 아케이드 구동 모델.
-// 공개 인터페이스는 기존과 동일(group, speed, heading, speedKmh, placeAt, boost, update)
+// 공개 인터페이스: group, speed, heading, speedKmh, placeAt, update
 
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
@@ -14,7 +14,6 @@ const REVERSE = 5000;
 const MAX_SPEED = 42;       // m/s
 const MAX_YAW = 1.0;        // 최대 요 회전속도(rad/s) — 너무 높으면 휙휙 돎
 const GRIP = 11;            // 측면 접지(클수록 안 미끄러짐)
-const DRIFT_GRIP = 2.6;     // 드리프트 시 접지
 
 const _v1 = new CANNON.Vec3();
 
@@ -47,7 +46,6 @@ export class Car {
         });
       });
     }
-    this.boostTimer = 0;
     this.roll = 0;
 
     // 후미등: Blender에서 모델에 넣은 발광 재질(LightR*)을 찾아 사용.
@@ -100,12 +98,8 @@ export class Car {
     this.sync();
   }
 
-  boost(duration = 2) {
-    this.boostTimer = Math.max(this.boostTimer, duration);
-  }
-
   // input: 아날로그 통합 컨트롤 {steer∈[-1,1](+=좌), throttle∈[0,1], brake∈[0,1],
-  // drift, highBeam} — 키보드 부울({forward,left,...})만 와도 동작(하위 호환)
+  // highBeam} — 키보드 부울({forward,left,...})만 와도 동작(하위 호환)
   update(dt, input) {
     const b = this.body;
     const f = this.forward();
@@ -119,9 +113,7 @@ export class Car {
     let drive = 0;
     if (throttle > 0.02) drive = ENGINE * throttle;
     else if (brake > 0.02) drive = (fwd > 0.5 ? -BRAKE : -REVERSE) * brake;
-    const boosting = this.boostTimer > 0;
-    if (boosting) { drive *= 1.6; this.boostTimer -= dt; }
-    if (fwd > (boosting ? MAX_SPEED * 1.4 : MAX_SPEED) && drive > 0) drive = 0;
+    if (fwd > MAX_SPEED && drive > 0) drive = 0;
     // 무게중심에 순수 선형력(토크 X). applyForce의 상대점 인자 오용 금지.
     b.force.x += fx * drive;
     b.force.z += fz * drive;
@@ -131,24 +123,23 @@ export class Car {
     const steer = input.steer ?? ((input.left ? 1 : 0) - (input.right ? 1 : 0));
     const speedFactor = Math.min(1, Math.abs(fwd) / 7);
     const highDamp = 1 / (1 + Math.max(0, Math.abs(fwd) - 10) * 0.03);
-    const targetYaw = steer * MAX_YAW * speedFactor * highDamp * (fwd < -0.5 ? -1 : 1) * (input.drift ? 1.35 : 1);
+    const targetYaw = steer * MAX_YAW * speedFactor * highDamp * (fwd < -0.5 ? -1 : 1);
     b.angularVelocity.y = THREE.MathUtils.lerp(b.angularVelocity.y, targetYaw, Math.min(1, 6 * dt));
 
-    // 측면 접지(그립): 옆으로 미끄러지는 속도를 제거 → 드리프트 시 약하게
+    // 측면 접지(그립): 옆으로 미끄러지는 속도를 제거
     const rx = fz, rz = -fx; // 오른쪽 벡터(수평)
     const lat = b.velocity.x * rx + b.velocity.z * rz;
-    const k = input.drift ? DRIFT_GRIP : GRIP;
-    const frac = Math.min(1, k * dt);
+    const frac = Math.min(1, GRIP * dt);
     b.velocity.x -= rx * lat * frac;
     b.velocity.z -= rz * lat * frac;
 
     // 폭주 방지: 총 속도 상한
     const sp = Math.hypot(b.velocity.x, b.velocity.z);
-    const cap = boosting ? 70 : 58;
+    const cap = 58;
     if (sp > cap) { b.velocity.x *= cap / sp; b.velocity.z *= cap / sp; }
 
     // 후미등: 브레이크로 감속하거나, 스로틀 뗀 채 달려 감속 중일 때 밝게
-    const braking = (brake > 0.02 && fwd > 0.3) || (throttle < 0.02 && !boosting && fwd > 5);
+    const braking = (brake > 0.02 && fwd > 0.3) || (throttle < 0.02 && fwd > 5);
     const ti = braking ? this.tailBase * 3.5 : this.tailBase;
     for (const m of this.tailMats) m.emissiveIntensity = ti;
 

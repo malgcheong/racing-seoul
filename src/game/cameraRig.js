@@ -19,7 +19,7 @@ export class CameraRig {
   }
 
   // car: Car 인스턴스 / fpView: 1인칭 여부 / eye: 콕핏 눈 위치(차 로컬) / snap: 즉시 이동
-  update(car, { fpView, eye, snap = false, boosting = false } = {}) {
+  update(car, { fpView, eye, snap = false } = {}) {
     const group = car.group;
     if (this.topViewH > 0) {
       this.camera.position.set(group.position.x + 1, group.position.y + this.topViewH, group.position.z);
@@ -51,9 +51,9 @@ export class CameraRig {
       lookAt = group.position.clone().add(new THREE.Vector3(0, 1.8, 0));
     }
 
-    // 속도감: 고속·부스터에서 시야각이 벌어지고 카메라가 미세하게 흔들림
+    // 속도감: 고속에서 시야각이 벌어진다
     const speedRatio = Math.min(1, Math.abs(car.speed) / MAX_SPEED_ABS);
-    const targetFov = BASE_FOV + speedRatio * speedRatio * 9 + (boosting ? 7 : 0);
+    const targetFov = BASE_FOV + speedRatio * speedRatio * 9;
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.07);
     this.camera.updateProjectionMatrix();
 

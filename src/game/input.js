@@ -1,5 +1,5 @@
 // 입력 계층 — 키보드(이벤트) / 게임패드(매 프레임 폴링) / 터치(온스크린 버튼) 3계층을
-// 하나의 아날로그 컨트롤 {steer, throttle, brake, drift, highBeam}로 합성한다.
+// 하나의 아날로그 컨트롤 {steer, throttle, brake, highBeam}로 합성한다.
 // 게임 로직(game.js)은 매 프레임 pollPad() → collect()만 호출하는 단일 소비자.
 // 시점 전환(C키·패드 Y·터치 '시점' 버튼)은 onToggleView 콜백으로 위임.
 
@@ -9,9 +9,9 @@ export class InputSystem {
   constructor({ onToggleView } = {}) {
     this.onToggleView = onToggleView || (() => {});
     // kb는 autoSteer/autodrive(개발용)가 직접 쓰는 공개 상태 — 필드명 유지
-    this.kb = { forward: false, backward: false, left: false, right: false, drift: false, highBeam: false };
-    this.pad = { steer: 0, throttle: 0, brake: 0, drift: false, high: false };
-    this.touch = { l: false, r: false, throttle: false, brake: false, drift: false, high: false };
+    this.kb = { forward: false, backward: false, left: false, right: false, highBeam: false };
+    this.pad = { steer: 0, throttle: 0, brake: 0, high: false };
+    this.touch = { l: false, r: false, throttle: false, brake: false, high: false };
     this._touchBinds = [];
   }
 
@@ -23,7 +23,6 @@ export class InputSystem {
         case 'ArrowDown': case 'KeyS': k.backward = down; break;
         case 'ArrowLeft': case 'KeyA': k.left = down; break;
         case 'ArrowRight': case 'KeyD': k.right = down; break;
-        case 'ShiftLeft': case 'ShiftRight': k.drift = down; break;
         case 'KeyF': k.highBeam = down; break; // 상향등(누르는 동안) — 앞차 양보 요구
         case 'KeyC': if (down && !e.repeat) this.onToggleView(); break;
         default: return;
@@ -43,7 +42,7 @@ export class InputSystem {
     const tc = document.querySelector('#touch-controls');
     if (!isTouch || !tc) return;
     tc.classList.remove('hidden');
-    // HUD 속도계·부스터 게이지·미니맵을 버튼 위로 올리는 CSS 훅
+    // HUD 속도계·미니맵을 버튼 위로 올리는 CSS 훅
     document.body.classList.add('touch-mode');
     const bind = (id, on, off) => {
       const el = document.querySelector(id);
@@ -61,7 +60,6 @@ export class InputSystem {
     bind('#tc-right', () => { t.r = true; }, () => { t.r = false; });
     bind('#tc-accel', () => { t.throttle = true; }, () => { t.throttle = false; });
     bind('#tc-brake', () => { t.brake = true; }, () => { t.brake = false; });
-    bind('#tc-drift', () => { t.drift = true; }, () => { t.drift = false; });
     bind('#tc-beam', () => { t.high = true; }, () => { t.high = false; });
     bind('#tc-cam', () => this.onToggleView(), null); // 탭 = 시점 전환
   }
@@ -79,7 +77,7 @@ export class InputSystem {
   }
 
   // ── 게임패드: 이벤트가 없어 매 프레임 폴링 (표준 매핑) ──
-  // 좌스틱/십자 조향 · RT 가속 · LT 브레이크 · A 드리프트 · X 상향등 · Y 시점 전환
+  // 좌스틱/십자 조향 · RT 가속 · LT 브레이크 · X 상향등 · Y 시점 전환
   pollPad() {
     const p = this.pad;
     let gp = null;
@@ -91,7 +89,7 @@ export class InputSystem {
     if (!gp) {
       if (this.padActive) { // 연결 해제 순간 잔류 입력 제거
         p.steer = p.throttle = p.brake = 0;
-        p.drift = p.high = false;
+        p.high = false;
         this.padActive = false;
       }
       return;
@@ -104,7 +102,6 @@ export class InputSystem {
       : Math.abs(ax) < 0.12 ? 0 : -ax; // 데드존
     p.throttle = Math.max(btn(7).value || 0, btn(12).pressed ? 1 : 0);
     p.brake = Math.max(btn(6).value || 0, btn(13).pressed ? 1 : 0);
-    p.drift = btn(0).pressed;
     p.high = btn(2).pressed;
     const view = btn(3).pressed; // 엣지 검출(누르는 동안 연속 토글 방지)
     if (view && !this._padView) this.onToggleView();
@@ -119,7 +116,6 @@ export class InputSystem {
       steer: THREE.MathUtils.clamp(steer, -1, 1),
       throttle: Math.max(k.forward ? 1 : 0, p.throttle, t.throttle ? 1 : 0),
       brake: Math.max(k.backward ? 1 : 0, p.brake, t.brake ? 1 : 0),
-      drift: k.drift || p.drift || t.drift,
       highBeam: k.highBeam || p.high || t.high,
     };
   }
