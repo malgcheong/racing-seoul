@@ -121,6 +121,11 @@ function makeXcient() {
   };
 }
 
+// 버스 후미등 램프 지오메트리/하우징 재질 — 스폰마다 재사용(공유)
+const _busLampGeo = new THREE.BoxGeometry(0.055, 0.038, 0.014);
+const _busHousingGeo = new THREE.BoxGeometry(0.075, 0.055, 0.02);
+const _busHousingMat = new THREE.MeshStandardMaterial({ color: 0x141417, roughness: 0.6 });
+
 // 고속버스(에어로 스페이스): 리버리 유지(틴트 없음), 트럭류 차로 규칙(slow) 적용
 function makeBus() {
   const built = buildFromTemplate('trafficBus', {});
@@ -138,12 +143,30 @@ function makeBus() {
       }
     });
   });
+  // 원본 후미등은 전폭(2m) 발광 바가 후면과 같은 평면에 코플레이너로 붙어 있어
+  // '표면에 붙인 발광 스티커'처럼 보인다(사용자 피드백 — 차체 안에 박혀 보여야).
+  // 바를 숨기고 모서리 두 개의 램프(하우징 절반 매립 + 발광면 소폭 돌출)로 교체
+  const root = built.group.getObjectByName('Bus') || built.group;
+  let strip = null;
+  built.group.traverse((o) => {
+    if (!o.isMesh || strip) return;
+    const ms = Array.isArray(o.material) ? o.material : [o.material];
+    if (ms.includes(built.tailMat)) strip = o;
+  });
+  if (strip && built.tailMat) {
+    strip.visible = false;
+    for (const sx of [-1, 1]) {
+      const housing = new THREE.Mesh(_busHousingGeo, _busHousingMat);
+      housing.position.set(sx * 0.185, -0.1, -1.005); // 후면(z=-1)에 절반 매립
+      const lamp = new THREE.Mesh(_busLampGeo, built.tailMat);
+      lamp.position.set(sx * 0.185, -0.1, -1.012); // 하우징에서 살짝 돌출
+      root.add(housing, lamp);
+    }
+  }
   return {
     ...built,
-    // tailScale: 후미등 발광 감광 — 이 모델은 후미등이 폭 2m 스트립 하나라
-    // 승용차 기준 강도(4.2/1.3)를 그대로 주면 블룸+톤매핑에서 코어가 하얗게
-    // 타버린다(거대한 백색 사각형처럼 보임)
-    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true, tailScale: 0.35 },
+    // tailScale: 램프가 승용차급 크기로 줄었으니 가벼운 감광만(블룸 절제)
+    dims: { w: 2.5, l: 11.0, mass: 11000, slow: true, tailScale: 0.8 },
   };
 }
 
