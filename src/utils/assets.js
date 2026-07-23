@@ -25,7 +25,6 @@ const FILES = {
   trafficIoniq5: '/assets/traffic_ioniq5.glb',     // "Hyundai Ioniq 5 lowpoly" by andikapratamaw
   trafficSonata: '/assets/traffic_sonata.glb',     // "2017 Hyundai Sonata Hybrid" by m3ika3D
   trafficBus: '/assets/traffic_bus.glb',           // "1998 Hyundai Aero Space" by ImperialBlue3D
-  trafficBmw8: '/assets/traffic_bmw8.glb',         // "Bmw 8 car" by itsrit3sh
   trafficGClass: '/assets/traffic_gclass.glb',     // "Mercedes Benz G-Class W263" by Lexyc16
   trafficDamas: '/assets/traffic_damas.glb',       // "Chevrolet Damas" by own.guest
   trafficBongo: '/assets/traffic_bongo.glb',       // "Hyundai Porter II (Bongo III)" by yunho98
