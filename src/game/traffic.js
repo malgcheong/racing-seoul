@@ -203,6 +203,24 @@ export class TrafficSystem {
 
   arcAtIndex(idx) { return this.cum[Math.min(idx, this.n)]; }
 
+  // 바디 실제 위치의 호길이 근사 — guess 주변 윈도우에서 최근접 샘플 탐색.
+  // (충돌로 밀린 차의 논리 위치 재동기화용 — 드문 이벤트라 비용 무시 가능)
+  arcNear(guessS, pos) {
+    let lo = 0, hi = this.n - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.cum[mid] <= guessS) lo = mid; else hi = mid;
+    }
+    let bi = lo, bd = Infinity;
+    const from = Math.max(0, lo - 80), to = Math.min(this.n - 1, lo + 80);
+    for (let i = from; i <= to; i++) {
+      const dx = pos.x - this.samples[i].pos.x, dz = pos.z - this.samples[i].pos.z;
+      const d = dx * dx + dz * dz;
+      if (d < bd) { bd = d; bi = i; }
+    }
+    return { s: this.cum[bi], idx: bi };
+  }
+
   // 주의: 반환 벡터는 공용 스크래치 재사용(매 프레임 차량 수×3 할당 → GC 스터터 방지).
   // 다음 posAt 호출 전에 값을 소비할 것. 개방 트랙: s는 [0, L]로 클램프.
   posAt(s) {
@@ -220,13 +238,14 @@ export class TrafficSystem {
   }
 
   spawnAhead(car, playerS) {
-    // 팝인 방지: 야간 안개에 묻히는 거리(140m~)에서만 등장시킨다.
-    // 개방 트랙: 목적지 부근이면 앞에 자리가 없으므로 플레이어 뒤쪽에 배치(안 보임).
-    const ahead = this.debugClose ? 14 + this.rng() * 22 : 140 + this.rng() * 130;
+    // 팝인 방지: 야간 안개(220m~)에 완전히 묻히는 거리에서만 등장시킨다.
+    // (기존 140m는 안개 시작 전이라 헤드라이트 팝인이 보였다 — 순간이동 체감 원인)
+    // 개방 트랙: 목적지 부근이면 앞에 자리가 없으므로 플레이어 뒤쪽에 배치.
+    const ahead = this.debugClose ? 14 + this.rng() * 22 : 260 + this.rng() * 160;
     if (playerS + ahead < this.L - 60) {
       car.s = playerS + ahead;
     } else {
-      car.s = Math.max(0, playerS - 80 - this.rng() * 120);
+      car.s = Math.max(0, playerS - 130 - this.rng() * 120);
     }
     // 지정차로제 스폰: 트럭류는 3~4차로(하위), 승용차는 2~4차로 —
     // 1차로(인덱스 0, 중분대 쪽)는 추월 전용이라 순항 스폰 금지.
@@ -249,12 +268,12 @@ export class TrafficSystem {
     car.yieldReq = 0; // 상향등 양보 요구 누적(초)
     car.escapeT = 0;  // 1차로 복귀용 임시 가속 타이머
 
-    // 종종 다른 차 옆에 나란히 스폰 — 단, 그 차가 플레이어 시야 밖(140m+)일 때만
+    // 종종 다른 차 옆에 나란히 스폰 — 단, 그 차가 안개 밖(260m+)일 때만
     if (!this.debugClose && !car.villain && this.rng() < 0.35) {
       const buddy = this.cars.find((c) => {
         if (!c.active || c === car) return false;
         const bAhead = c.s - playerS;
-        return bAhead > 140;
+        return bAhead > 260;
       });
       if (buddy) {
         car.s = Math.max(0, Math.min(this.L - 40, buddy.s + (this.rng() - 0.5) * 5));
@@ -484,8 +503,9 @@ export class TrafficSystem {
       const diff = ((desYaw - Math.atan2(2 * (b.quaternion.w * b.quaternion.y), 1 - 2 * b.quaternion.y * b.quaternion.y) + Math.PI) % (2 * Math.PI)) - Math.PI;
       b.angularVelocity.y = THREE.MathUtils.lerp(b.angularVelocity.y, diff * 2.5, Math.min(1, 4 * dt));
 
-      // 플레이어 뒤로 멀어졌거나 목적지에 다다르면 재활용(앞쪽에 재배치)
-      if (car.s < playerS - 60 || car.s >= this.L - 10) this.spawnAhead(car, playerS);
+      // 플레이어 뒤로 충분히 멀어졌거나(룸미러에 소멸이 안 보일 거리) 목적지에
+      // 다다르면 재활용(앞쪽 안개 너머에 재배치)
+      if (car.s < playerS - 120 || car.s >= this.L - 10) this.spawnAhead(car, playerS);
     }
   }
 
@@ -494,16 +514,23 @@ export class TrafficSystem {
     for (const car of this.cars) {
       if (!car.active) continue;
       const b = car.body;
-      const p = this.posAt(car.s);
-      // 충돌·힘부족 등으로 논리 위치(car.s)에서 너무 벗어나면 강제 복귀.
-      // (클램프가 car.s 기준이라, 크게 뒤처진 차는 커브에서 잘못된 방향으로
-      //  보정돼 도로 밖으로 새는 원인이 됐다)
+      let p = this.posAt(car.s);
+      // 충돌·힘부족으로 논리 위치(car.s)와 바디가 크게 벌어지면 —
+      // 예전엔 바디를 논리 위치로 순간이동시켰다(눈에 띄는 텔레포트, 사용자 지적).
+      // 이제 물리를 신뢰: 논리 호길이·차선을 바디 실위치로 재동기화하고,
+      // 극단 발산(>45m, 이론상 도로 밖 이탈)일 때만 하드 스냅으로 복구한다.
       const tx = p.pos.x + p.left.x * car.lane, tz = p.pos.z + p.left.z * car.lane;
-      if (Math.hypot(b.position.x - tx, b.position.z - tz) > 16) {
+      const drift = Math.hypot(b.position.x - tx, b.position.z - tz);
+      if (drift > 45) {
         b.position.x = tx; b.position.z = tz;
         b.velocity.set(p.tan.x * car.effSpeed, 0, p.tan.z * car.effSpeed);
         b.angularVelocity.setZero();
         b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.atan2(p.tan.x, p.tan.z));
+      } else if (drift > 16) {
+        car.s = this.arcNear(car.s, b.position).s;
+        p = this.posAt(car.s);
+        const lat = (b.position.x - p.pos.x) * p.left.x + (b.position.z - p.pos.z) * p.left.z;
+        car.lane = lat; // 현재 횡위치에서 목표 차선으로 자연 수렴(순간 횡이동 방지)
       }
       const dxr = b.position.x - p.pos.x, dzr = b.position.z - p.pos.z;
       const lat = dxr * p.left.x + dzr * p.left.z;
