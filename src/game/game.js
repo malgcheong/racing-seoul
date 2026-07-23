@@ -399,6 +399,7 @@ export class Game {
         laneCenters,
         segLen,
         rng: botRng,
+        hardMode: this.hardMode, // 이지모드면 봇도 사고 판정 없음(플레이어와 동일 규칙)
         onEvent: (type, bot) => this.onBotEvent(type, bot),
       });
       const slotPos = (slot) => {

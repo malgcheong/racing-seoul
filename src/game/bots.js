@@ -41,7 +41,8 @@ function makeLabel(text) {
 }
 
 export class BotSystem {
-  // opts: { count, models[], laneMin, laneMax, laneCenters[], segLen, rng, onEvent(type, bot) }
+  // opts: { count, models[], laneMin, laneMax, laneCenters[], segLen, rng,
+  //         hardMode, onEvent(type, bot) }
   constructor(scene, world, samples, opts) {
     this.scene = scene;
     this.world = world;
@@ -51,6 +52,7 @@ export class BotSystem {
     this.laneMin = opts.laneMin;
     this.laneMax = opts.laneMax;
     this.laneCenters = opts.laneCenters;
+    this.hardMode = opts.hardMode ?? true; // 플레이어와 같은 규칙 — 이지모드면 봇도 사고 없음
     this.onEvent = opts.onEvent || (() => {});
     const rng = opts.rng || Math.random;
 
@@ -78,9 +80,10 @@ export class BotSystem {
         laneCd: 0, stuckT: 0,
         crashed: false, finished: false, finishTime: null, progress: 0,
       };
-      // 리타이어 규칙: 트래픽(__traffic)과 유효 충돌 = 사고 — 플레이어와 동일 임계(1.5)
+      // 리타이어 규칙: 트래픽(__traffic)과 유효 충돌 = 사고 — 플레이어와 동일 임계(1.5).
+      // 하드모드 해제 시엔 플레이어처럼 봇도 사고 판정 없음(밀림만)
       car.body.addEventListener('collide', (e) => {
-        if (bot.crashed || bot.finished || !e.body?.__traffic) return;
+        if (!this.hardMode || bot.crashed || bot.finished || !e.body?.__traffic) return;
         const rel = e.contact ? Math.abs(e.contact.getImpactVelocityAlongNormal()) : 8;
         if (rel < 1.5) return;
         bot.crashed = true;
