@@ -182,7 +182,7 @@ function startGame(seed, palette) {
   state.game?.dispose();
 
   const ui = {
-    onHud({ speed, progress, time, avg, boosting, boostGauge, flash, rank, racers }) {
+    onHud({ speed, progress, time, avg, flash, rank, racers }) {
       $('#hud-speed').textContent = speed;
       $('#hud-progress').textContent = `${Math.round((progress || 0) * 100)}%`;
       // 순위 (봇 대결일 때만 표시)
@@ -195,8 +195,6 @@ function startGame(seed, palette) {
       }
       $('#hud-time').textContent = formatTime(time);
       $('#hud-score').textContent = Math.round(avg || 0);
-      $('#boost-indicator').classList.toggle('hidden', !boosting);
-      $('#boost-fill').style.width = `${Math.round((boostGauge || 0) * 100)}%`;
       // 중앙 팝업 (니어미스)
       const nm = $('#nearmiss');
       if (flash) {

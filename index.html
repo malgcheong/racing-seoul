@@ -147,14 +147,11 @@
         <div class="hud-item"><span class="hud-label">평균 km/h</span><span id="hud-score">0</span></div>
       </div>
       <div class="hud-speed"><span id="hud-speed">0</span><span class="hud-unit">km/h</span></div>
-      <div id="boost-indicator" class="boost-indicator hidden">🚀 부스터!</div>
-      <!-- 부스터 게이지(칼치기로 충전) -->
-      <div class="boost-gauge"><div id="boost-fill" class="boost-fill"></div></div>
       <!-- 니어미스 팝업 -->
       <div id="nearmiss" class="nearmiss hidden"></div>
     </div>
     <div id="countdown" class="countdown hidden"></div>
-    <div class="controls-hint">↑↓←→ / WASD 운전 · Shift 드리프트 · F 상향등 · C 시점 전환 · 🎮 게임패드 지원</div>
+    <div class="controls-hint">↑↓←→ / WASD 운전 · F 상향등 · C 시점 전환 · 🎮 게임패드 지원</div>
     <!-- 터치 컨트롤: 터치 가능 기기에서만 표시 (game.bindTouch가 hidden 해제) -->
     <div id="touch-controls" class="touch-controls hidden">
       <div class="tc-steer">
@@ -167,7 +164,6 @@
           <button id="tc-beam" class="tc-btn tc-mini" type="button">상향등</button>
         </div>
         <div class="tc-row">
-          <button id="tc-drift" class="tc-btn tc-drift" type="button">드리프트</button>
           <button id="tc-brake" class="tc-btn tc-brake" type="button">▼</button>
           <button id="tc-accel" class="tc-btn tc-accel" type="button">▲</button>
         </div>

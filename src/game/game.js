@@ -9,7 +9,6 @@ import { TrafficSystem } from './traffic.js';
 import { BotSystem } from './bots.js';
 import { InputSystem } from './input.js';
 import { Minimap } from './minimap.js';
-import { ParticleSystem } from './particles.js';
 import { Car } from './car.js';
 import { buildCockpit } from './cockpit.js';
 import { createWorld } from './physics.js';
@@ -105,8 +104,6 @@ export class Game {
     this.rig = new CameraRig(this.camera, {
       topViewH: parseFloat(this.params.get('top')) || 0, // 개발·검증: ?top=220 조감 뷰
     });
-
-    this.particles = new ParticleSystem(this.scene);
 
     // 월드(도로·분기·화살표·도시 장식) 조립은 map/buildWorld.js — 주행 파라미터만 받는다
     const branchClosed = this.params.get('branch') !== 'open';
@@ -231,8 +228,6 @@ export class Game {
       this.car.placeAt(mine.pos, mine.heading);
       this._gridIdx = mine.gi; // 아래 currentSampleIdx 초기화가 이 값을 쓴다
     }
-    // 니어미스 칼치기 → 부스터 게이지 충전(점수 없음)
-    this.boostGauge = 0;   // 0~1, 차면 부스터 발동
     this.flash = null;     // 중앙 팝업 { t, label, sub?, close? }
 
     this.currentSampleIdx = this._gridIdx ?? 0;
@@ -411,7 +406,6 @@ export class Game {
     this._failUi = () => this.ui.onFail(result);
   }
 
-  // 니어미스: 아슬아슬할수록 부스터 게이지를 많이 충전 (점수는 없음 — 순위는 평균속도)
   // 가드레일 긁힘 효과음(연타 방지 쿨다운 — 밀착 중엔 ~0.3초 간격으로 지글거림)
   railScrape() {
     const now = performance.now();
@@ -420,10 +414,9 @@ export class Game {
     sounds.scrape();
   }
 
+  // 니어미스 칼치기: 연출만(팝업+휙 효과음) — 부스터·게이지는 프로젝트에서 제외됨
   onNearMiss(minDist, dir, near, collide) {
     const prox = THREE.MathUtils.clamp((near - minDist) / (near - collide), 0, 1); // 1=아슬아슬
-    this.boostGauge += 0.12 + prox * 0.16;
-    if (this.boostGauge >= 1) { this.car.boost(2.2); this.boostGauge = 0; sounds.boost?.(); }
     sounds.whoosh?.(dir); // 스친 방향에서 도플러 "휙"
     this.flash = { t: 0.9, label: prox > 0.6 ? '아슬아슬!' : '니어미스!', close: prox > 0.6 };
   }
@@ -516,37 +509,6 @@ export class Game {
         L.intensity = 190 * t * t * (3 - 2 * t); // smoothstep 페이드
       } else {
         L.intensity = 0;
-      }
-    }
-  }
-
-  // 부스터 불꽃 / 드리프트 스모크
-  emitDriveParticles() {
-    const car = this.car;
-    const back = new THREE.Vector3(-Math.sin(car.heading), 0, -Math.cos(car.heading));
-    const rear = car.group.position.clone().addScaledVector(back, 2.4);
-    rear.y = car.group.position.y + 0.7;
-
-    if (car.boostTimer > 0) {
-      for (let i = 0; i < 4; i++) {
-        const jitter = new THREE.Vector3(
-          (Math.random() - 0.5) * 1.2, Math.random() * 0.5, (Math.random() - 0.5) * 1.2
-        );
-        const vel = back.clone().multiplyScalar(14 + Math.random() * 8).add(jitter.multiplyScalar(4));
-        const color = { r: 1.0, g: 0.45 + Math.random() * 0.35, b: 0.12 };
-        this.particles.emit(rear.clone().add(jitter), vel, color, 0.4 + Math.random() * 0.25);
-      }
-    }
-    const ctl = this.ctl;
-    if (ctl?.drift && Math.abs(ctl.steer) > 0.25 && Math.abs(car.speed) > 18) {
-      for (let i = 0; i < 2; i++) {
-        const side = i === 0 ? 1 : -1;
-        const left = new THREE.Vector3(-back.z, 0, back.x);
-        const wheel = rear.clone().addScaledVector(left, side * 1.1);
-        wheel.y = car.group.position.y + 0.35;
-        const vel = back.clone().multiplyScalar(5).add(new THREE.Vector3(0, 1.8 + Math.random(), 0));
-        const g = 0.5 + Math.random() * 0.2;
-        this.particles.emit(wheel, vel, { r: g, g, b: g }, 0.6 + Math.random() * 0.3);
       }
     }
   }
@@ -652,7 +614,7 @@ export class Game {
       }
 
       // 엔진음: 속도(가상 기어 피치)·스로틀·부스터 반영 (패드 트리거는 아날로그)
-      sounds.engineUpdate(this.car.speedKmh, ctl.throttle, this.car.boostTimer > 0);
+      sounds.engineUpdate(this.car.speedKmh, ctl.throttle);
 
       // 미니맵 갱신(~10Hz) — 봇(빨간 점)
       this._mmAcc = (this._mmAcc || 0) + dt;
@@ -679,7 +641,6 @@ export class Game {
       this.totalDist += Math.max(0, this.car.speed) * dt;
 
       this.maxSpeed = Math.max(this.maxSpeed, this.car.speedKmh);
-      this.emitDriveParticles();
       this.checkFinish();
 
       // 진행률: 분기 주행 중엔 진출점→100% 구간을 분기 진척도로 보간(driver)
@@ -700,8 +661,6 @@ export class Game {
         progress: hudProgress,
         time: this.raceTime,
         avg: this.raceTime > 1 ? (this.totalDist / this.raceTime) * 3.6 : 0,
-        boosting: this.car.boostTimer > 0,
-        boostGauge: this.boostGauge,
         flash: this.flash,
         rank, racers,
       });
@@ -733,12 +692,7 @@ export class Game {
     this.worldTime += dt;
     this.envUpdate?.(this.worldTime, dt);
     this.skyLife?.update(this.worldTime, dt);
-    this.particles.update(dt);
-    this.rig.update(this.car, {
-      fpView: this.fpView,
-      eye: this.cockpit?.eye,
-      boosting: this.car.boostTimer > 0,
-    });
+    this.rig.update(this.car, { fpView: this.fpView, eye: this.cockpit?.eye });
     this.updateCockpit(dt);
     this.env.follow(this.car.group.position, this.camera.position);
     this.updateLampLights();
