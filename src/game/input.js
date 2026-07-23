@@ -11,8 +11,10 @@ export class InputSystem {
     // kb는 autoSteer/autodrive(개발용)가 직접 쓰는 공개 상태 — 필드명 유지
     this.kb = { forward: false, backward: false, left: false, right: false, highBeam: false };
     this.pad = { steer: 0, throttle: 0, brake: 0, high: false };
-    this.touch = { l: false, r: false, throttle: false, brake: false, high: false };
-    this._touchBinds = [];
+    this.touch = { throttle: false, brake: false, high: false };
+    // 가상 조이스틱(모바일): x/y ∈ [-1,1] — x=조향(화면 오른쪽 +), y=아래 +
+    this.stick = { id: null, x: 0, y: 0 };
+    this._touchBinds = []; // [el, type, fn] — 해제용
   }
 
   bind() {
@@ -44,34 +46,68 @@ export class InputSystem {
     tc.classList.remove('hidden');
     // HUD 속도계·미니맵을 버튼 위로 올리는 CSS 훅
     document.body.classList.add('touch-mode');
-    const bind = (id, on, off) => {
+    const on = (el, type, fn) => {
+      el.addEventListener(type, fn);
+      this._touchBinds.push([el, type, fn]);
+    };
+    const bind = (id, press, release) => {
       const el = document.querySelector(id);
       if (!el) return;
-      const down = (e) => { e.preventDefault(); on(); };
-      const up = (e) => { e.preventDefault(); off?.(); };
-      el.addEventListener('pointerdown', down);
-      el.addEventListener('pointerup', up);
-      el.addEventListener('pointercancel', up);
-      el.addEventListener('pointerleave', up); // 누른 채 버튼 밖으로 미끄러진 손가락
-      this._touchBinds.push([el, down, up]);
+      on(el, 'pointerdown', (e) => { e.preventDefault(); press(); });
+      for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+        on(el, type, (e) => { e.preventDefault(); release?.(); });
+      }
     };
     const t = this.touch;
-    bind('#tc-left', () => { t.l = true; }, () => { t.l = false; });
-    bind('#tc-right', () => { t.r = true; }, () => { t.r = false; });
     bind('#tc-accel', () => { t.throttle = true; }, () => { t.throttle = false; });
     bind('#tc-brake', () => { t.brake = true; }, () => { t.brake = false; });
     bind('#tc-beam', () => { t.high = true; }, () => { t.high = false; });
     bind('#tc-cam', () => this.onToggleView(), null); // 탭 = 시점 전환
+
+    // ── 가상 조이스틱: 베이스에 포인터 캡처 — 스틱 밖으로 나가도 추적 유지 ──
+    const base = document.querySelector('#tc-stick');
+    const knob = document.querySelector('#tc-stick-knob');
+    if (base && knob) {
+      const st = this.stick;
+      const R = 44; // 노브 이동 반경(px)
+      const track = (e) => {
+        const r = base.getBoundingClientRect();
+        let dx = e.clientX - (r.left + r.width / 2);
+        let dy = e.clientY - (r.top + r.height / 2);
+        const len = Math.hypot(dx, dy);
+        if (len > R) { dx *= R / len; dy *= R / len; }
+        st.x = dx / R;
+        st.y = dy / R;
+        knob.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+      };
+      const reset = () => {
+        st.id = null;
+        st.x = st.y = 0;
+        knob.style.transform = 'translate(0px, 0px)';
+      };
+      on(base, 'pointerdown', (e) => {
+        e.preventDefault();
+        st.id = e.pointerId;
+        track(e);
+        // 캡처 실패(합성 이벤트 등)해도 pointermove로 계속 추적된다
+        try { base.setPointerCapture(e.pointerId); } catch { /* noop */ }
+      });
+      on(base, 'pointermove', (e) => {
+        if (st.id === e.pointerId) { e.preventDefault(); track(e); }
+      });
+      for (const type of ['pointerup', 'pointercancel']) {
+        on(base, type, (e) => {
+          if (st.id === e.pointerId) { e.preventDefault(); reset(); }
+        });
+      }
+    }
   }
 
   unbindTouch() {
-    for (const [el, down, up] of this._touchBinds) {
-      el.removeEventListener('pointerdown', down);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      el.removeEventListener('pointerleave', up);
-    }
+    for (const [el, type, fn] of this._touchBinds) el.removeEventListener(type, fn);
     this._touchBinds = [];
+    this.stick.id = null;
+    this.stick.x = this.stick.y = 0;
     document.querySelector('#touch-controls')?.classList.add('hidden');
     document.body.classList.remove('touch-mode');
   }
@@ -108,14 +144,18 @@ export class InputSystem {
     this._padView = view;
   }
 
-  // 키보드·패드·터치를 하나의 아날로그 컨트롤로 합성 — car.update/연출의 단일 입력원
+  // 키보드·패드·터치(버튼+조이스틱)를 하나의 아날로그 컨트롤로 합성
   collect() {
     const k = this.kb, p = this.pad, t = this.touch;
-    const steer = (k.left ? 1 : 0) - (k.right ? 1 : 0) + p.steer + (t.l ? 1 : 0) - (t.r ? 1 : 0);
+    // 조이스틱: 데드존(0.15) 제거 후 리스케일. 화면 x+(오른쪽)=조향 -(우회전),
+    // y-(위)=스로틀, y+(아래)=브레이크
+    const dz = (v) => (Math.abs(v) < 0.15 ? 0 : (v - Math.sign(v) * 0.15) / 0.85);
+    const sx = dz(this.stick.x), sy = dz(this.stick.y);
+    const steer = (k.left ? 1 : 0) - (k.right ? 1 : 0) + p.steer - sx;
     return {
       steer: THREE.MathUtils.clamp(steer, -1, 1),
-      throttle: Math.max(k.forward ? 1 : 0, p.throttle, t.throttle ? 1 : 0),
-      brake: Math.max(k.backward ? 1 : 0, p.brake, t.brake ? 1 : 0),
+      throttle: Math.max(k.forward ? 1 : 0, p.throttle, t.throttle ? 1 : 0, Math.max(0, -sy)),
+      brake: Math.max(k.backward ? 1 : 0, p.brake, t.brake ? 1 : 0, Math.max(0, sy)),
       highBeam: k.highBeam || p.high || t.high,
     };
   }
