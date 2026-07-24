@@ -51,9 +51,15 @@ export class CameraRig {
       lookAt = group.position.clone().add(new THREE.Vector3(0, 1.8, 0));
     }
 
+    // 세로 화면(모바일 포트레이트) 보정: 수직 FOV 고정이면 수평 시야가 터널처럼
+    // 좁아진다(aspect 0.46에서 hFOV ≈ 35°) — 화면비 제곱근 역보정으로 벌린다
+    const aspect = this.camera.aspect || 1;
+    const baseFov = aspect < 1
+      ? Math.min(100, BASE_FOV / Math.sqrt(aspect))
+      : BASE_FOV;
     // 속도감: 고속에서 시야각이 벌어진다
     const speedRatio = Math.min(1, Math.abs(car.speed) / MAX_SPEED_ABS);
-    const targetFov = BASE_FOV + speedRatio * speedRatio * 9;
+    const targetFov = baseFov + speedRatio * speedRatio * 9;
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.07);
     this.camera.updateProjectionMatrix();
 
