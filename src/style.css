@@ -227,6 +227,27 @@ body {
 
 /* 주의: 게임 캔버스 위에서는 backdrop-filter가 매 프레임 블러 비용을 유발하므로 금지 */
 
+/* ---------- 좁은 화면(모바일 세로) 대응 ---------- */
+@media (max-width: 560px) {
+  .logo { font-size: 40px; letter-spacing: 3px; }
+  .opt-row { flex-wrap: wrap; gap: 10px 16px; padding: 0 10px; }
+  .credits { padding: 0 10px; }
+  /* HUD 상단 바 압축 — 4개 지표가 390px 폭 안에 들어가게 */
+  .hud-top { gap: 10px; padding: 7px 12px; top: 8px; max-width: 96vw; }
+  .hud-item { min-width: 52px; }
+  .hud-item span:last-child { font-size: 15px; }
+  .hud-label { font-size: 9px; letter-spacing: 1px; }
+  .hud-speed { font-size: 34px; right: 14px; }
+  .hud-unit { font-size: 12px; margin-left: 4px; }
+  .minimap { width: 118px; height: 118px; right: 10px; } /* 캔버스 CSS 축소 */
+  .countdown { font-size: 84px; }
+  .nearmiss .nm-label { font-size: 20px; }
+  .nearmiss .nm-sub { font-size: 14px; }
+  /* 터치 모드: 조이스틱·버튼과 겹치지 않게 HUD를 위로 */
+  .touch-mode .hud-speed { bottom: 176px; right: 12px; }
+  .touch-mode .minimap { bottom: 210px; }
+}
+
 .countdown {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-size: 120px; font-weight: 900; text-shadow: 0 4px 30px rgba(0,0,0,.7);
