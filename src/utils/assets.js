@@ -18,6 +18,8 @@ const FILES = {
   buildingB: '/assets/building_b.glb',
   mountain: '/assets/mountain.glb',
   mountainRange: '/assets/mountain_range.glb',
+  kaiju: '/assets/kaiju.glb', // 한강 괴수 — Blender(MCP) 자체 제작, 발광 등지느러미
+
   assemblyHall: '/assets/landmark_assembly.glb',
   tower63: '/assets/landmark_63.glb',
   // 트래픽 3종: 전부 Sketchfab CC-BY (크레딧 index.html) — 사용자 결정(2026-07-15)으로

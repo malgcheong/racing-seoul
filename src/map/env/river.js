@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { pick, range } from '../../utils/rng.js';
+import { instantiate } from '../../utils/assets.js';
 import { buildRoadMesh } from '../trackGenerator.js';
 import {
   CONE_HEIGHT, UP, addInstanced, canvasTex, composeMatrix,
@@ -364,6 +365,70 @@ export function buildRiverCrossing(scene, rng, samples, river, bankSpots, update
     whiteRefl.instanceMatrix.needsUpdate = true;
     redRefl.instanceMatrix.needsUpdate = true;
   });
+
+  // ── 한강 괴수: 반잠수 카이주 (Blender MCP 자체 제작 kaiju.glb, 149KB) ──
+  // 다리 남측(주행 방향 기준 우측) 120m, 서안 쪽 수중에 허리까지 잠긴 채 응시 —
+  // 다리 진입 시점에 전방 우측 ~36°/200m로 자연 시야에 들어오고, 건너는 동안
+  // 우측으로 크게 스쳐 지나간다. 3/4 각도라 발광 등지느러미·눈이 함께 읽힌다.
+  // 정면(+Z)이 다리를 향하므로 yaw>0은 접근하는 플레이어(동안) 쪽으로 몸을 튼다.
+  {
+    const kaiju = instantiate('kaiju');
+    const kx = x0 + (x1 - x0) * 0.32;
+    const kz = zBridge - 120;
+    const sunk = -18; // 발바닥 기준 침수 깊이 — 무릎·꼬리끝은 물속, 허리부터 위로
+    kaiju.position.set(kx, sunk, kz);
+    kaiju.rotation.y = 0.5;
+    // 발광 파츠 메시(NPR 토온 변환 후에도 재질 name이 보존되므로 매 프레임
+    // mesh.material로 접근 — 재질 참조를 캐시하면 변환 시 끊긴다)
+    let spineMesh = null, eyeMesh = null;
+    kaiju.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = false; // 태양 그림자 카메라 범위 밖 — 셰도 패스 비용만 듦
+      if (o.material.name === 'KaijuSpineGlow') spineMesh = o;
+      else if (o.material.name === 'KaijuEyeGlow') eyeMesh = o;
+    });
+    scene.add(kaiju);
+
+    // 수면 물결 링 3개: 괴수 둘레에서 퍼져나가며 소멸 (위상 엇갈림)
+    const ringGeo = new THREE.RingGeometry(0.86, 1.0, 48);
+    ringGeo.rotateX(-Math.PI / 2);
+    const rings = [];
+    for (let k = 0; k < 3; k++) {
+      const rm = new THREE.MeshBasicMaterial({
+        color: 0x9fd8ff, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: true,
+      });
+      const ring = new THREE.Mesh(ringGeo, rm);
+      ring.position.set(kx, 0.46, kz); // 물결 최고점(~0.28) 위
+      scene.add(ring);
+      rings.push({ ring, rm, phase: k / 3 });
+    }
+    // 등지느러미 시안 글로우의 수면 번짐 (호흡과 동기 펄스)
+    const glowMat = new THREE.MeshBasicMaterial({
+      map: lightPoolTexture(), color: 0x4fc8e8, transparent: true, opacity: 0.4,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: true,
+    });
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), glowMat);
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.set(kx, 0.43, kz);
+    scene.add(glow);
+
+    updaters.push((t) => {
+      // 느린 호흡(상하 스웰) + 몸 돌리기 — 살아있는 느낌, 과하면 우스워진다
+      kaiju.position.y = sunk + Math.sin(t * 0.35) * 0.9;
+      kaiju.rotation.y = 0.5 + Math.sin(t * 0.11) * 0.07;
+      kaiju.rotation.x = Math.sin(t * 0.23) * 0.012;
+      const pulse = 0.78 + 0.22 * Math.sin(t * 0.8);
+      if (spineMesh) spineMesh.material.emissiveIntensity = 4 * pulse;
+      if (eyeMesh) eyeMesh.material.emissiveIntensity = 6 * (0.9 + 0.1 * Math.sin(t * 2.1));
+      glowMat.opacity = 0.28 + 0.18 * pulse;
+      for (const { ring, rm, phase } of rings) {
+        const f = (t * 0.11 + phase) % 1; // 0→1 확산 후 리셋
+        ring.scale.setScalar(26 * (0.55 + f * 0.85));
+        rm.opacity = 0.26 * (1 - f) * Math.min(f / 0.08, 1); // 페이드인→아웃
+      }
+    });
+  }
 
   // 수면 반사 스트릭: 강변 빌딩(bankSpots) 불빛이 강 안쪽으로 길게 번짐 (additive)
   const streakMats = [];

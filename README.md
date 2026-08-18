@@ -2,13 +2,24 @@
 
 강 건너 야경을 끼고 한강 다리를 건너 달리는 **Three.js 아케이드 레이싱**.
 동쪽 도심에서 출발해 붉은 아치 다리를 건너 여의도(국회의사당·63빌딩) 방면 도심까지,
-밤·노을·비 무드가 시드마다 바뀌는 편도 코스를 달린다.
+밤·노을 무드를 골라 시드마다 달라지는 편도 코스를 달린다.
+
+**▶ 바로 플레이: <https://racing-seoul.pages.dev>**
 
 ## 실행
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
+```
+
+## 배포
+
+Cloudflare Pages 프로젝트 `racing-seoul`에 wrangler로 직접 업로드한다 (git 연동 아님):
+
+```bash
+npm run build
+npx wrangler pages deploy dist --project-name racing-seoul --branch main --commit-dirty=true
 ```
 
 ## 조작
@@ -26,6 +37,7 @@ npm run dev        # http://localhost:5173
 - **1인칭 콕핏**: 918 실내 셸 + 계기판·사이드미러 실시간 렌더
 - **만화 렌더(NPR)**: 시작 화면 토글 — 셀셰이딩(MeshToon) + 화면공간 잉크 윤곽선 (`?npr=1|0`으로 강제 가능)
 - **연출**: WebAudio 합성 엔진음·충돌음, 미니맵 + 분기 사전 안내, 사고 슬로모, 니어미스 팝업, 발광 노면 화살표
+- **한강 괴수**: 다리 남측 강물에 반잠수한 100m급 카이주(Blender 자체 제작) — 발광 등지느러미·눈, 호흡 스웰, 퍼지는 물결 링
 
 ## 코드 구조
 
@@ -59,7 +71,7 @@ src/
 - **렌더**: Three.js (r170) — 절차적 셰이더 창문, PCF 그림자, Bloom/비네트 포스트프로세싱
 - **물리**: cannon-es — 평면 구속 강체 + 아케이드 힘 모델
 - **빌드**: Vite 6
-- **에셋**: Blender(MCP)로 가공한 GLB — 실차는 Sketchfab CC-BY 모델을 경량화(데시메이트)
+- **에셋**: Blender(MCP)로 가공한 GLB — 실차는 Sketchfab CC-BY 모델을 경량화(데시메이트), 한강 괴수·산맥은 자체 제작
 
 ## 라이선스
 
